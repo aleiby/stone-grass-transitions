@@ -1,0 +1,1677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stone–Grass Transitions via Crack-Following Paths on Irregular Dual Grids</title>
+<style>
+:root {
+  --bg: #0d1117; --bg2: #161b22; --bg3: #21262d;
+  --fg: #e6edf3; --fg2: #8b949e; --fg3: #484f58;
+  --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+  --yellow: #d29922; --purple: #bc8cff; --cyan: #39d2c0;
+  --orange: #f0883e;
+  --code-bg: #0d1117; --code-border: #30363d;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; overflow:hidden; background:var(--bg); color:var(--fg); font-family:var(--font); }
+
+.slides { position:relative; width:100%; height:100%; }
+.slide {
+  position:absolute; inset:0; display:flex; flex-direction:column;
+  justify-content:center; align-items:center; padding:3vh 5vw;
+  opacity:0; pointer-events:none; transition: opacity 0.4s ease;
+}
+.slide.active { opacity:1; pointer-events:auto; }
+
+h1 { font-size:clamp(1.8rem,3.5vw,3.2rem); font-weight:700; line-height:1.15; text-align:center; margin-bottom:0.4em; color:var(--fg); }
+h2 { font-size:clamp(1.3rem,2.5vw,2.2rem); font-weight:600; color:var(--accent); margin-bottom:0.5em; text-align:center; }
+h3 { font-size:clamp(1rem,1.5vw,1.3rem); font-weight:600; color:var(--fg); margin-bottom:0.4em; }
+p, li { font-size:clamp(0.85rem,1.2vw,1.05rem); line-height:1.6; color:var(--fg2); max-width:56em; }
+.subtitle { font-size:clamp(1rem,1.5vw,1.3rem); color:var(--fg2); text-align:center; margin-bottom:1.5em; }
+.small { font-size:clamp(0.75rem,1vw,0.9rem); color:var(--fg3); }
+
+.demo-area {
+  display:flex; gap:1.5em; align-items:flex-start; justify-content:center;
+  flex-wrap:wrap; width:100%; max-width:1400px;
+}
+.demo-panel { display:flex; flex-direction:column; align-items:center; gap:0.5em; }
+.demo-panel canvas { border:1px solid var(--bg3); border-radius:6px; cursor:crosshair; }
+.demo-panel .label { font-size:0.8rem; color:var(--fg2); text-align:center; }
+
+.controls {
+  display:flex; flex-wrap:wrap; gap:0.8em 1.5em; align-items:center;
+  justify-content:center; padding:0.6em 1em; background:var(--bg2);
+  border-radius:8px; border:1px solid var(--bg3); margin-top:0.5em;
+}
+.controls label { font-size:0.8rem; color:var(--fg2); display:flex; align-items:center; gap:0.4em; }
+.controls input[type=range] { width:100px; accent-color:var(--accent); }
+.controls .val { font-size:0.75rem; color:var(--accent); font-family:var(--mono); min-width:3em; }
+.controls button {
+  padding:0.3em 0.8em; border:1px solid var(--bg3); border-radius:4px;
+  background:var(--bg3); color:var(--fg); font-size:0.8rem; cursor:pointer;
+}
+.controls button:hover { background:var(--accent); color:var(--bg); }
+.controls button.active { background:var(--accent); color:var(--bg); }
+
+pre {
+  background:var(--code-bg); border:1px solid var(--code-border);
+  border-radius:6px; padding:0.8em 1em; font-family:var(--mono);
+  font-size:clamp(0.7rem,0.9vw,0.85rem); line-height:1.5; color:var(--fg2);
+  overflow-x:auto; max-width:60em; text-align:left; white-space:pre;
+}
+pre .kw { color:var(--purple); } pre .fn { color:var(--accent); }
+pre .cm { color:var(--fg3); font-style:italic; } pre .num { color:var(--orange); }
+pre .str { color:var(--green); } pre .type { color:var(--cyan); }
+
+.pipeline-box {
+  display:flex; gap:0.3em; align-items:center; flex-wrap:wrap; justify-content:center;
+}
+.pipe-stage {
+  padding:0.5em 0.9em; border-radius:6px; font-size:0.85rem; font-weight:500;
+  text-align:center; min-width:7em;
+}
+.pipe-arrow { color:var(--fg3); font-size:1.2rem; }
+
+.two-col {
+  display:grid; grid-template-columns:1fr 1fr; gap:2em; width:100%;
+  max-width:1200px; align-items:start;
+}
+.two-col.narrow { max-width:1000px; }
+@media (max-width:800px) { .two-col { grid-template-columns:1fr; } }
+
+.tile-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; }
+.tile-cell {
+  width:clamp(48px,5vw,64px); height:clamp(48px,5vw,64px); border-radius:4px;
+  display:flex; align-items:center; justify-content:center; font-family:var(--mono);
+  font-size:0.7rem; color:var(--fg); border:2px solid transparent; cursor:pointer;
+  transition: border-color 0.2s, transform 0.15s;
+}
+.tile-cell:hover { transform:scale(1.08); }
+.tile-cell.highlight { border-color:var(--accent); }
+
+.case-legend {
+  display:flex; gap:0.5em; flex-wrap:wrap; justify-content:center; margin-top:0.5em;
+}
+.case-badge {
+  padding:0.2em 0.6em; border-radius:4px; font-size:0.75rem; font-weight:600;
+  font-family:var(--mono);
+}
+
+.nav {
+  position:fixed; bottom:1.5em; left:50%; transform:translateX(-50%);
+  display:flex; gap:0.6em; align-items:center; background:var(--bg2);
+  padding:0.4em 1em; border-radius:24px; border:1px solid var(--bg3);
+  z-index:100; user-select:none;
+}
+.nav button {
+  width:32px; height:32px; border:none; border-radius:50%;
+  background:var(--bg3); color:var(--fg); font-size:1rem;
+  cursor:pointer; display:flex; align-items:center; justify-content:center;
+}
+.nav button:hover { background:var(--accent); color:var(--bg); }
+.nav .page { font-size:0.8rem; color:var(--fg2); font-family:var(--mono); min-width:4em; text-align:center; }
+
+.key-insight {
+  background: linear-gradient(135deg, rgba(88,166,255,0.08), rgba(188,140,255,0.08));
+  border-left:3px solid var(--accent); padding:0.7em 1em; border-radius:0 6px 6px 0;
+  margin:0.5em 0; max-width:50em;
+}
+.key-insight p { color:var(--fg); }
+
+.content-block { max-width:900px; width:100%; }
+.content-block ul { padding-left:1.5em; }
+.content-block li { margin-bottom:0.3em; }
+
+.flex-center { display:flex; flex-direction:column; align-items:center; gap:0.8em; }
+.gap-sm { gap:0.4em; }
+.mt-1 { margin-top:0.8em; }
+.mb-1 { margin-bottom:0.8em; }
+</style>
+</head>
+<body>
+
+<div class="slides" id="slides">
+
+<!-- ==================== SLIDE 0: TITLE ==================== -->
+<section class="slide" id="s-title">
+  <h1>Stone–Grass Transitions via<br>Crack-Following Paths</h1>
+  <p class="subtitle">On Irregular Dual Grids</p>
+  <p style="text-align:center; color:var(--fg3); font-size:0.9rem; margin-top:1em;">
+    An engine-agnostic technique for natural material boundaries<br>
+    that follow features in the underlying stone texture
+  </p>
+  <div style="margin-top:2em; text-align:center;">
+    <p class="small">Use <kbd style="background:var(--bg3);padding:0.15em 0.5em;border-radius:3px;">&#8592;</kbd> <kbd style="background:var(--bg3);padding:0.15em 0.5em;border-radius:3px;">&#8594;</kbd> to navigate</p>
+  </div>
+</section>
+
+<!-- ==================== SLIDE 1: MOTIVATION ==================== -->
+<section class="slide" id="s-motivation">
+  <h2>The Problem</h2>
+  <div class="two-col narrow">
+    <div class="flex-center">
+      <canvas id="cv-bilinear" width="320" height="320"></canvas>
+      <p class="small" style="text-align:center">Bilinear blending: smooth gradient<br>ignores texture features</p>
+    </div>
+    <div class="flex-center">
+      <canvas id="cv-crackfollow" width="320" height="320"></canvas>
+      <p class="small" style="text-align:center">Crack-following: boundary traces<br>natural seams in the stone</p>
+    </div>
+  </div>
+  <div class="key-insight mt-1">
+    <p>Stone textures have natural cracks between individual stones. If we detect those cracks and route transition boundaries through them, the stone-grass edge looks like grass growing between the stones — not an arbitrary line painted across them.</p>
+  </div>
+</section>
+
+<!-- ==================== SLIDE 2: PIPELINE ==================== -->
+<section class="slide" id="s-pipeline">
+  <h2>Pipeline Overview</h2>
+  <div class="pipeline-box mb-1">
+    <div class="pipe-stage" style="background:#1a3a2a;color:var(--green);">Dual Grid<br><span class="small">Tile topology</span></div>
+    <span class="pipe-arrow">&#10132;</span>
+    <div class="pipe-stage" style="background:#2a2a1a;color:var(--yellow);">Surface Case<br><span class="small">Corner flags</span></div>
+    <span class="pipe-arrow">&#10132;</span>
+    <div class="pipe-stage" style="background:#1a2a3a;color:var(--accent);">Crack Detection<br><span class="small">Local contrast</span></div>
+    <span class="pipe-arrow">&#10132;</span>
+    <div class="pipe-stage" style="background:#2a1a2a;color:var(--purple);">Center Snap<br><span class="small">Find crack seed</span></div>
+    <span class="pipe-arrow">&#10132;</span>
+    <div class="pipe-stage" style="background:#1a2a2a;color:var(--cyan);">Pathfinding<br><span class="small">Monotonic DP</span></div>
+    <span class="pipe-arrow">&#10132;</span>
+    <div class="pipe-stage" style="background:#2a1a1a;color:var(--orange);">Classify<br><span class="small">Flap folding</span></div>
+    <span class="pipe-arrow">&#10132;</span>
+    <div class="pipe-stage" style="background:#1a1a2a;color:var(--accent);">Mask + Blur<br><span class="small">R8 texture</span></div>
+  </div>
+  <div class="content-block" style="text-align:center;">
+    <p>Stages 3–7 run as GPU compute shaders at patch load time.<br>The fragment shader samples the final mask with a single <code>texture()</code> call.</p>
+  </div>
+  <pre style="margin-top:0.8em;">
+<span class="cm">// Fragment shader — production path (entire crack system = 1 texture fetch)</span>
+<span class="type">vec2</span> mask_uv = (world_xz * stone_tex_scale - mask_origin) * mask_inv_extent;
+<span class="type">float</span> stone = <span class="fn">smoothstep</span>(<span class="num">0.2</span>, <span class="num">0.8</span>, <span class="fn">texture</span>(crack_mask_tex, mask_uv).r);
+</pre>
+</section>
+
+<!-- ==================== SLIDE 3: DUAL GRID ==================== -->
+<section class="slide" id="s-dualgrid">
+  <h2>The Irregular Dual Grid</h2>
+  <div class="demo-area">
+    <div class="demo-panel">
+      <canvas id="cv-dualgrid" width="480" height="400"></canvas>
+      <div class="controls">
+        <button id="btn-grid-regular" class="active">Regular</button>
+        <button id="btn-grid-irregular">Irregular (Stalberg)</button>
+        <button id="btn-grid-toggle">Toggle Grid/Dual</button>
+      </div>
+    </div>
+    <div class="content-block" style="max-width:400px;">
+      <h3>16 corner configs &#10132; 6 tile cases</h3>
+      <p class="mb-1">Each dual cell has 4 corners, each grass or water. The 16 possible configurations reduce to 6 unique shapes via rotation:</p>
+      <div class="tile-grid" id="tile-grid-display"></div>
+      <div class="case-legend" id="case-legend"></div>
+      <p class="small mt-1">This same grid also carries <strong>surface type</strong> (stone vs grass) per corner — a separate 4-bit mask that drives the transition system.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== SLIDE 4: SURFACE CASE ==================== -->
+<section class="slide" id="s-surface">
+  <h2>Surface Case: Which Corners Are Stone?</h2>
+  <div class="demo-area">
+    <div class="demo-panel">
+      <canvas id="cv-surface" width="480" height="400"></canvas>
+      <div class="controls">
+        <label>Click corners to toggle stone/grass</label>
+      </div>
+    </div>
+    <div class="content-block" style="max-width:420px;">
+      <p class="mb-1">Within each grass tile, corners can be stone or grass. The 4-bit <code>SurfaceCase</code> bitmask determines how many and which edge paths are needed:</p>
+      <ul>
+        <li><strong>0 paths</strong>: all-grass (0000) or all-stone (1111)</li>
+        <li><strong>2 paths</strong>: one corner differs (corner/three cases)</li>
+        <li><strong>4 paths</strong>: edge, saddle, or mixed cases</li>
+      </ul>
+      <div class="key-insight mt-1">
+        <p>Each edge path connects the centers of adjacent tiles. For mixed tiles, these paths will be <em>routed through the crack network</em> in texture space.</p>
+      </div>
+      <pre class="mt-1">
+<span class="cm">// Per-instance data packed into INSTANCE_CUSTOM</span>
+<span class="type">float</span> surfaceBits  = INSTANCE_CUSTOM.x; <span class="cm">// 4-bit mask</span>
+<span class="type">float</span> surfaceRot   = INSTANCE_CUSTOM.y; <span class="cm">// canonical rotation</span>
+<span class="type">float</span> crackPathRow = INSTANCE_CUSTOM.z; <span class="cm">// atlas row</span>
+</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== SLIDE 5: CRACK DETECTION ==================== -->
+<section class="slide" id="s-cracks">
+  <h2>Step 1: Crack Detection via Local Contrast</h2>
+  <div class="demo-area">
+    <div class="demo-panel">
+      <canvas id="cv-height" width="280" height="280"></canvas>
+      <p class="label">Stone heightmap</p>
+    </div>
+    <div class="demo-panel">
+      <canvas id="cv-blur" width="280" height="280"></canvas>
+      <p class="label">Blurred (local average)</p>
+    </div>
+    <div class="demo-panel">
+      <canvas id="cv-cracks" width="280" height="280"></canvas>
+      <p class="label">Detected cracks</p>
+    </div>
+  </div>
+  <div class="controls" style="max-width:700px;">
+    <label>blur mip <input type="range" id="sl-blur-mip" min="1" max="8" step="0.5" value="4"><span class="val" id="v-blur-mip">4.0</span></label>
+    <label>midpoint <input type="range" id="sl-midpoint" min="0" max="0.3" step="0.005" value="0.05"><span class="val" id="v-midpoint">0.05</span></label>
+    <label>spread <input type="range" id="sl-spread" min="0.01" max="0.3" step="0.005" value="0.08"><span class="val" id="v-spread">0.08</span></label>
+  </div>
+  <pre style="margin-top:0.5em;">
+<span class="type">float</span> h_pixel = <span class="fn">textureLod</span>(stone_height, uv, <span class="num">0.0</span>).r;       <span class="cm">// fine detail</span>
+<span class="type">float</span> h_blur  = <span class="fn">textureLod</span>(stone_height, uv, blur_mip).r;  <span class="cm">// local average</span>
+<span class="type">float</span> crack_depth = h_blur - h_pixel;                      <span class="cm">// positive = in a crack</span>
+<span class="type">float</span> in_crack = <span class="fn">smoothstep</span>(midpoint - spread/<span class="num">2</span>, midpoint + spread/<span class="num">2</span>, crack_depth);
+</pre>
+</section>
+
+<!-- ==================== SLIDE 6: CENTER SNAPPING ==================== -->
+<section class="slide" id="s-centers">
+  <h2>Step 2: Center Snapping</h2>
+  <div class="demo-area">
+    <div class="demo-panel">
+      <canvas id="cv-centers" width="480" height="400"></canvas>
+      <div class="controls">
+        <button id="btn-centers-regen">Regenerate</button>
+        <label>search radius <input type="range" id="sl-search-rad" min="2" max="16" step="1" value="8"><span class="val" id="v-search-rad">8</span></label>
+      </div>
+    </div>
+    <div class="content-block" style="max-width:400px;">
+      <h3>From geometric to crack center</h3>
+      <p>Each tile's geometric center (centroid of its 4 corners) may land on solid stone. We search the local neighborhood for the nearest crack pixel.</p>
+      <div class="key-insight mt-1">
+        <p><strong>Two-tier scoring:</strong> Any crack pixel beats any stone pixel (cost 0 vs 1000). Among crack pixels, prefer the closest to the geometric center. This ensures paths start and end inside the crack network.</p>
+      </div>
+      <pre class="mt-1">
+<span class="type">float</span> score = is_stone * <span class="num">1000.0</span> + dist;
+<span class="cm">// crack at distance 0.9 beats stone at distance 0.01</span>
+</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== SLIDE 7: PATHFINDING ==================== -->
+<section class="slide" id="s-pathfind">
+  <h2>Step 3: Edge Pathfinding — Monotonic DP</h2>
+  <div class="demo-area">
+    <div class="demo-panel">
+      <canvas id="cv-pathfind" width="580" height="400"></canvas>
+      <div class="controls">
+        <button id="btn-path-play">&#9654; Play</button>
+        <button id="btn-path-step">Step</button>
+        <button id="btn-path-reset">Reset</button>
+        <label>speed <input type="range" id="sl-path-speed" min="1" max="20" step="1" value="5"><span class="val" id="v-path-speed">5</span></label>
+        <label>cost ratio <input type="range" id="sl-cost-ratio" min="1" max="50" step="1" value="20"><span class="val" id="v-cost-ratio">20</span></label>
+      </div>
+    </div>
+    <div class="content-block" style="max-width:380px;">
+      <h3>Rotated-frame monotonic sweep</h3>
+      <p>For each edge (pair of adjacent tile centers), we sweep 65 steps along the center-to-center vector with 64 perpendicular lanes.</p>
+      <p class="mt-1">The cost field makes cracks cheap and stone expensive. The DP finds the minimum-cost path constrained to advance monotonically along the tangent.</p>
+      <pre class="mt-1">
+<span class="cm">// Per lane: check ±max_step neighbors</span>
+<span class="kw">for</span> (<span class="type">int</span> dr = <span class="num">0</span>; dr <= max_step; dr++) {
+  <span class="type">float</span> candidate = dp_prev[from]
+    + cell_cost + dr * diagonal_penalty;
+  <span class="kw">if</span> (candidate < best) {
+    best = candidate;
+    best_from = from;
+  }
+}
+</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== SLIDE 8: FLAP FOLDING ==================== -->
+<section class="slide" id="s-flaps">
+  <h2>Step 4: Flap Folding — The Sequential Overwrite Classifier</h2>
+  <div class="demo-area">
+    <div class="demo-panel">
+      <canvas id="cv-flaps" width="480" height="480"></canvas>
+      <div class="controls">
+        <button id="btn-flap-animate">Animate</button>
+        <button id="btn-flap-regen">New Paths</button>
+        <label>Show paths <input type="checkbox" id="chk-flap-paths" checked></label>
+      </div>
+    </div>
+    <div class="content-block" style="max-width:400px;">
+      <h3>Why not simple 2D quadrants?</h3>
+      <p class="mb-1">Crack paths are curved and at arbitrary angles. A fixed quadrant split (NE/SE/SW/NW) fails when paths tilt. Instead, we process edges S&#10132;E&#10132;N&#10132;W, each one <em>overwriting</em> the classification for pixels on its positive side.</p>
+
+      <h3>The algorithm</h3>
+      <p>For each pixel, evaluate all 4 edge paths. The <strong>last edge whose positive side contains this pixel</strong> (with domain guards) determines which corner owns it.</p>
+      <pre class="mt-1">
+<span class="cm">// sector_corner maps edge → corner</span>
+<span class="cm">// S→BR, E→TR, N→TL, W→BL</span>
+<span class="type">int</span> sector_corner[<span class="num">4</span>] = {<span class="num">1</span>,<span class="num">2</span>,<span class="num">3</span>,<span class="num">0</span>};
+<span class="type">int</span> assigned = <span class="num">0</span>; <span class="cm">// start with S edge</span>
+<span class="kw">for</span> (<span class="type">int</span> i = <span class="num">1</span>; i < <span class="num">4</span>; i++) {
+  <span class="kw">if</span> (side[i] <= <span class="num">0</span>) <span class="kw">continue</span>;
+  <span class="cm">// domain + wrap guards...</span>
+  assigned = i;
+}
+corner = sector_corner[assigned];
+</pre>
+      <p class="small mt-1">The <strong>wrap guard</strong> prevents W from stealing pixels that S legitimately owns when they run nearly parallel.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== SLIDE 9: MASK GENERATION ==================== -->
+<section class="slide" id="s-mask">
+  <h2>Step 5: Per-Patch Mask Generation</h2>
+  <div class="demo-area">
+    <div class="demo-panel">
+      <canvas id="cv-mask-raw" width="260" height="260"></canvas>
+      <p class="label">Raw classification</p>
+    </div>
+    <div class="demo-panel">
+      <canvas id="cv-mask-blur" width="260" height="260"></canvas>
+      <p class="label">After Gaussian blur</p>
+    </div>
+    <div class="demo-panel">
+      <canvas id="cv-mask-applied" width="260" height="260"></canvas>
+      <p class="label">Applied to stone texture</p>
+    </div>
+  </div>
+  <div class="controls" style="max-width:500px;">
+    <label>blur radius <input type="range" id="sl-mask-blur" min="0" max="12" step="1" value="4"><span class="val" id="v-mask-blur">4</span></label>
+    <button id="btn-mask-regen">Regenerate</button>
+  </div>
+  <div class="key-insight mt-1">
+    <p>The classify shader writes an R8 texture in <strong>stone-texture UV space</strong> (not screen space). Each texel finds its owning tile via point-in-quad, runs the sequential overwrite classifier, and writes the corner's stone flag. A separable Gaussian blur softens the transition. The fragment shader samples with a single <code>texture()</code> call.</p>
+  </div>
+</section>
+
+<!-- ==================== SLIDE 10: INTEGRATION ==================== -->
+<section class="slide" id="s-integration">
+  <h2>Fragment Shader Integration</h2>
+  <div class="two-col">
+    <div>
+      <h3>Vertex Shader: Data Carrier Transform</h3>
+      <pre>
+<span class="cm">// MODEL_MATRIX encodes tile corners, not a transform</span>
+<span class="type">vec2</span> c0 = <span class="type">vec2</span>(MODEL_MATRIX[<span class="num">0</span>][<span class="num">0</span>], MODEL_MATRIX[<span class="num">0</span>][<span class="num">1</span>]);
+<span class="type">vec2</span> c1 = <span class="type">vec2</span>(MODEL_MATRIX[<span class="num">0</span>][<span class="num">2</span>], MODEL_MATRIX[<span class="num">1</span>][<span class="num">0</span>]);
+<span class="type">vec2</span> c2 = <span class="type">vec2</span>(MODEL_MATRIX[<span class="num">1</span>][<span class="num">1</span>], MODEL_MATRIX[<span class="num">1</span>][<span class="num">2</span>]);
+<span class="type">vec2</span> c3 = <span class="type">vec2</span>(MODEL_MATRIX[<span class="num">2</span>][<span class="num">0</span>], MODEL_MATRIX[<span class="num">2</span>][<span class="num">1</span>]);
+
+<span class="cm">// Bilinear interpolation for irregular quads</span>
+<span class="type">vec2</span> world_xz = <span class="fn">mix</span>(
+  <span class="fn">mix</span>(corners[<span class="num">0</span>], corners[<span class="num">1</span>], pos.x),
+  <span class="fn">mix</span>(corners[<span class="num">3</span>], corners[<span class="num">2</span>], pos.x),
+  pos.y);
+</pre>
+      <h3 class="mt-1">Cliff Normals via Jacobian</h3>
+      <pre>
+<span class="cm">// J^{-T} transforms normals through deformation</span>
+<span class="type">vec2</span> dWdx = <span class="fn">mix</span>(c1-c0, c2-c3, pos.y);
+<span class="type">vec2</span> dWdy = <span class="fn">mix</span>(c3-c0, c2-c1, pos.x);
+<span class="type">float</span> det = dWdx.x*dWdy.y - dWdx.y*dWdy.x;
+</pre>
+    </div>
+    <div>
+      <h3>Fragment Shader: Compositing</h3>
+      <pre>
+<span class="cm">// 1. Sample the precomputed crack mask</span>
+<span class="type">float</span> stone_raw = <span class="fn">texture</span>(crack_mask_tex, mask_uv).r;
+<span class="type">float</span> stone = <span class="fn">smoothstep</span>(<span class="num">0.2</span>, <span class="num">0.8</span>, stone_raw);
+
+<span class="cm">// 2. PBR stone with parallax occlusion</span>
+<span class="type">vec2</span> pom_uv = <span class="fn">apply_pom</span>(stone_uv, view_ts, depth);
+<span class="type">vec3</span> albedo = <span class="fn">textureLod</span>(stone_albedo, pom_uv, mip);
+
+<span class="cm">// 3. Moss in cracks (local contrast again)</span>
+<span class="type">float</span> moss = in_crack * shade_factor * strength;
+albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
+
+<span class="cm">// 4. Blend with grass</span>
+<span class="type">vec3</span> final = <span class="fn">mix</span>(grass_color, albedo, stone);
+</pre>
+      <h3 class="mt-1">GPU Compute Pipeline</h3>
+      <pre>
+<span class="cm">// All dispatched in a single command buffer</span>
+<span class="fn">dispatch</span>(find_centers, tiles, <span class="num">1</span>);   <span class="cm">// 64 threads/tile</span>
+<span class="fn">barrier</span>();
+<span class="fn">dispatch</span>(pathfind, edges, <span class="num">1</span>);       <span class="cm">// 64 threads/edge</span>
+<span class="fn">barrier</span>();
+<span class="fn">dispatch</span>(classify, maskW/<span class="num">8</span>, maskH/<span class="num">8</span>); <span class="cm">// per-texel</span>
+<span class="fn">barrier</span>();
+<span class="fn">dispatch</span>(blur_h, maskW/<span class="num">64</span>, maskH);  <span class="cm">// separable</span>
+<span class="fn">barrier</span>();
+<span class="fn">dispatch</span>(blur_v, maskW, maskH/<span class="num">64</span>);
+</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== SLIDE 11: PERFORMANCE ==================== -->
+<section class="slide" id="s-perf">
+  <h2>Performance &amp; Implementation Notes</h2>
+  <div class="two-col">
+    <div class="content-block">
+      <h3>Compute Budget</h3>
+      <ul>
+        <li><strong>Center snapping:</strong> 1 workgroup per tile, 64 threads. ~17&times;17 search grid per tile = 289 height map samples.</li>
+        <li><strong>DP pathfinding:</strong> 1 workgroup per edge, 64 threads. 65 steps &times; 64 lanes = 4160 cost evaluations per edge.</li>
+        <li><strong>Classification:</strong> 8&times;8 workgroups over mask texture. Point-in-quad test iterates all tiles (use spatial acceleration for large patches).</li>
+        <li><strong>Blur:</strong> Separable Gaussian, radius 4. Two passes.</li>
+        <li>Typical patch: ~50 tiles, ~80 edges, 1024&times;1024 mask &#8594; <strong>&lt;2ms total GPU time</strong></li>
+      </ul>
+      <h3 class="mt-1">Memory</h3>
+      <ul>
+        <li>Edge paths: 65 &times; edges, R8 = ~5KB per patch</li>
+        <li>Edge metadata: 2 &times; edges, RGBA32F = ~2.5KB</li>
+        <li>Crack mask: 1024&times;1024, R8 + mips = ~1.3MB per patch</li>
+      </ul>
+    </div>
+    <div class="content-block">
+      <h3>Integration Checklist</h3>
+      <ul>
+        <li>Need a <strong>stone heightmap</strong> with visible cracks (most stone PBR textures work)</li>
+        <li>Need <strong>per-tile corner data</strong>: 4 world-space positions + stone/grass flags</li>
+        <li>Need <strong>adjacency</strong>: which tiles share edges (for edge list)</li>
+        <li>Compute pathfinding once at <strong>terrain load time</strong> (not per-frame)</li>
+        <li>Fragment shader cost: 1 texture sample + smoothstep (negligible)</li>
+      </ul>
+      <h3 class="mt-1">Alternative: Wavefront Relaxation</h3>
+      <p>For higher quality, replace DP with a full shortest-path solve via iterative relaxation on a corridor atlas. Trades the 64-lane band limit for texel-resolution paths at the cost of multiple relaxation passes.</p>
+      <div class="key-insight mt-1">
+        <p>The DP approach is sufficient for most use cases. The wavefront variant is only needed when paths must traverse very wide corridors at shallow angles.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== SLIDE 12: SUMMARY ==================== -->
+<section class="slide" id="s-summary">
+  <h2>Summary</h2>
+  <div class="content-block" style="text-align:center;">
+    <canvas id="cv-final" width="700" height="360"></canvas>
+    <div style="margin-top:1.5em;">
+      <p style="font-size:1.1rem; color:var(--fg);">Stone–grass boundaries that follow natural texture features,<br>computed entirely on the GPU at load time.</p>
+    </div>
+    <div style="display:flex;gap:2em;justify-content:center;margin-top:1.5em;flex-wrap:wrap;">
+      <div style="text-align:center;"><span style="font-size:2rem;color:var(--green);">1</span><br><span class="small">texture sample<br>per fragment</span></div>
+      <div style="text-align:center;"><span style="font-size:2rem;color:var(--accent);">&lt;2ms</span><br><span class="small">GPU compute<br>per patch</span></div>
+      <div style="text-align:center;"><span style="font-size:2rem;color:var(--purple);">0</span><br><span class="small">engine-specific<br>dependencies</span></div>
+      <div style="text-align:center;"><span style="font-size:2rem;color:var(--cyan);">5</span><br><span class="small">compute<br>dispatches</span></div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<!-- Navigation -->
+<div class="nav">
+  <button id="btn-prev" title="Previous (←)">&#8249;</button>
+  <span class="page" id="page-indicator">1 / 13</span>
+  <button id="btn-next" title="Next (→)">&#8250;</button>
+</div>
+
+<script>
+// ============================================================
+//  NAVIGATION
+// ============================================================
+const slides = document.querySelectorAll('.slide');
+let current = 0;
+const initialized = new Set();
+function goTo(i) {
+  if (i < 0 || i >= slides.length) return;
+  slides[current].classList.remove('active');
+  current = i;
+  slides[current].classList.add('active');
+  document.getElementById('page-indicator').textContent = `${current+1} / ${slides.length}`;
+  if (slideInits[current] && !initialized.has(current)) {
+    initialized.add(current);
+    slideInits[current]();
+  }
+}
+document.getElementById('btn-prev').onclick = () => goTo(current - 1);
+document.getElementById('btn-next').onclick = () => goTo(current + 1);
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); goTo(current + 1); }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); goTo(current - 1); }
+});
+const slideInits = {};
+
+// ============================================================
+//  NOISE UTILITIES
+// ============================================================
+function hashXY(x, y, seed) {
+  let h = (x * 374761393 + y * 668265263 + seed * 1274126177) | 0;
+  h = ((h ^ (h >> 13)) * 1274126177) | 0;
+  return ((h ^ (h >> 16)) >>> 0) / 4294967296;
+}
+
+function smoothNoise(x, y, seed) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = x - ix, fy = y - iy;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  const n00 = hashXY(ix, iy, seed), n10 = hashXY(ix+1, iy, seed);
+  const n01 = hashXY(ix, iy+1, seed), n11 = hashXY(ix+1, iy+1, seed);
+  return n00*(1-sx)*(1-sy) + n10*sx*(1-sy) + n01*(1-sx)*sy + n11*sx*sy;
+}
+
+function fbm(x, y, octaves, seed) {
+  let val = 0, amp = 1, freq = 1, total = 0;
+  for (let o = 0; o < octaves; o++) {
+    val += smoothNoise(x * freq, y * freq, seed + o * 17) * amp;
+    total += amp; amp *= 0.5; freq *= 2;
+  }
+  return val / total;
+}
+
+function worley(x, y, freq, seed) {
+  const cx = x * freq, cy = y * freq;
+  const ix = Math.floor(cx), iy = Math.floor(cy);
+  let minD = 999;
+  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+    const nx = ix + dx, ny = iy + dy;
+    const sx = nx + hashXY(nx, ny, seed) * 0.82 + 0.09;
+    const sy = ny + hashXY(nx, ny, seed + 7) * 0.82 + 0.09;
+    const d = Math.sqrt((cx - sx) ** 2 + (cy - sy) ** 2);
+    if (d < minD) minD = d;
+  }
+  return minD;
+}
+
+function generateStoneHeight(w, h, seed) {
+  const data = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const u = x / w, v = y / h;
+    const cellDist = worley(u, v, 6, seed || 42);
+    const baseH = 1 - Math.min(cellDist * 2.2, 1);
+    const detail = fbm(u * 8, v * 8, 3, (seed || 42) + 100) * 0.15;
+    const broad = fbm(u * 2, v * 2, 2, (seed || 42) + 200) * 0.2;
+    data[y * w + x] = Math.max(0, Math.min(1, baseH + detail + broad));
+  }
+  return data;
+}
+
+function boxBlur(src, w, h, radius) {
+  const dst = new Float32Array(w * h);
+  const tmp = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let sum = 0, cnt = 0;
+    for (let dx = -radius; dx <= radius; dx++) {
+      const nx = Math.max(0, Math.min(w - 1, x + dx));
+      sum += src[y * w + nx]; cnt++;
+    }
+    tmp[y * w + x] = sum / cnt;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let sum = 0, cnt = 0;
+    for (let dy = -radius; dy <= radius; dy++) {
+      const ny = Math.max(0, Math.min(h - 1, y + dy));
+      sum += tmp[ny * w + x]; cnt++;
+    }
+    dst[y * w + x] = sum / cnt;
+  }
+  return dst;
+}
+
+function gaussBlur(src, w, h, radius) {
+  if (radius <= 0) return new Float32Array(src);
+  const sigma = radius / 2.5;
+  const kernel = [];
+  let ksum = 0;
+  for (let i = -radius; i <= radius; i++) {
+    const w2 = Math.exp(-(i * i) / (2 * sigma * sigma));
+    kernel.push(w2); ksum += w2;
+  }
+  for (let i = 0; i < kernel.length; i++) kernel[i] /= ksum;
+
+  const tmp = new Float32Array(w * h);
+  const dst = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let sum = 0;
+    for (let k = -radius; k <= radius; k++) {
+      const nx = Math.max(0, Math.min(w - 1, x + k));
+      sum += src[y * w + nx] * kernel[k + radius];
+    }
+    tmp[y * w + x] = sum;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let sum = 0;
+    for (let k = -radius; k <= radius; k++) {
+      const ny = Math.max(0, Math.min(h - 1, y + k));
+      sum += tmp[ny * w + x] * kernel[k + radius];
+    }
+    dst[y * w + x] = sum;
+  }
+  return dst;
+}
+
+function drawHeatmap(ctx, data, w, h, cw, ch, colorFn) {
+  const img = ctx.createImageData(cw, ch);
+  for (let py = 0; py < ch; py++) for (let px = 0; px < cw; px++) {
+    const sx = Math.floor(px / cw * w), sy = Math.floor(py / ch * h);
+    const v = data[sy * w + sx];
+    const [r, g, b] = colorFn ? colorFn(v) : [v * 255, v * 255, v * 255];
+    const i = (py * cw + px) * 4;
+    img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// ============================================================
+//  SLIDE 1: MOTIVATION DEMO
+// ============================================================
+slideInits[1] = function initMotivation() {
+
+  const S = 320, HS = 128;
+  const height = generateStoneHeight(HS, HS, 42);
+  const blur = boxBlur(height, HS, HS, 8);
+
+  function drawTile(cvId, useCracks) {
+    const cv = document.getElementById(cvId);
+    const ctx = cv.getContext('2d');
+    const img = ctx.createImageData(S, S);
+
+    for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
+      const u = px / S, v = py / S;
+      const sx = Math.floor(u * HS), sy = Math.floor(v * HS);
+      const idx = sy * HS + sx;
+      const hv = height[idx], bv = blur[idx];
+      const crackDepth = bv - hv;
+      const inCrack = smoothstep(0.02, 0.1, crackDepth);
+
+      let stoneFactor;
+      if (useCracks) {
+        const cx = u - 0.5, cy = v - 0.5;
+        const rawAngle = Math.atan2(cy, cx);
+        const edgeDist = Math.max(Math.abs(cx), Math.abs(cy));
+        const rampIn = smoothstep(0.2, 0.35, edgeDist);
+        const pathOffset = inCrack * 0.15 * Math.sin(rawAngle * 3 + crackDepth * 20);
+        stoneFactor = smoothstep(0.45 + pathOffset, 0.55 + pathOffset, edgeDist + (inCrack - 0.5) * 0.1);
+        stoneFactor = Math.max(0, Math.min(1, stoneFactor));
+      } else {
+        const dist = Math.sqrt((u - 0.5) ** 2 + (v - 0.5) ** 2);
+        stoneFactor = smoothstep(0.25, 0.45, dist);
+      }
+
+      const stoneR = hv * 160 + 40, stoneG = hv * 140 + 35, stoneB = hv * 130 + 30;
+      const mossAmt = useCracks ? inCrack * stoneFactor * 0.4 : 0;
+      const sR = stoneR * (1 - mossAmt) + 45 * mossAmt;
+      const sG = stoneG * (1 - mossAmt) + 76 * mossAmt;
+      const sB = stoneB * (1 - mossAmt) + 30 * mossAmt;
+      const grassR = 55 + fbm(u * 10, v * 10, 2, 99) * 30;
+      const grassG = 120 + fbm(u * 10, v * 10, 2, 100) * 40;
+      const grassB = 30 + fbm(u * 10, v * 10, 2, 101) * 20;
+
+      const i = (py * S + px) * 4;
+      img.data[i] = sR * stoneFactor + grassR * (1 - stoneFactor);
+      img.data[i + 1] = sG * stoneFactor + grassG * (1 - stoneFactor);
+      img.data[i + 2] = sB * stoneFactor + grassB * (1 - stoneFactor);
+      img.data[i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    ctx.strokeStyle = '#30363d'; ctx.lineWidth = 2;
+    ctx.strokeRect(0, 0, S, S);
+  }
+
+  drawTile('cv-bilinear', false);
+  drawTile('cv-crackfollow', true);
+};
+
+function smoothstep(e0, e1, x) {
+  const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+}
+
+// ============================================================
+//  SLIDE 3: DUAL GRID DEMO
+// ============================================================
+slideInits[3] = function initDualGrid() {
+
+  const cv = document.getElementById('cv-dualgrid');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+
+  const caseColors = ['#21262d','#3fb950','#58a6ff','#d29922','#bc8cff','#39d2c0'];
+  const caseNames = ['Empty','Corner','Edge','Saddle','Three','Full'];
+  const lookup = [[0,0],[1,0],[1,3],[2,0],[1,2],[3,0],[2,3],[4,0],[1,1],[2,1],[3,1],[4,1],[2,2],[4,2],[4,3],[5,0]];
+
+  let useIrregular = false, showDual = true;
+
+  function drawGrid() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0a1628'; ctx.fillRect(0, 0, W, H);
+
+    const gridW = 6, gridH = 5;
+    const cellW = W / (gridW + 1), cellH = H / (gridH + 1);
+    const ox = cellW * 0.5, oy = cellH * 0.5;
+
+    const pts = [];
+    for (let gy = 0; gy <= gridH; gy++) for (let gx = 0; gx <= gridW; gx++) {
+      let px = ox + gx * cellW, py = oy + gy * cellH;
+      if (useIrregular) {
+        px += (hashXY(gx, gy, 1) - 0.5) * cellW * 0.45;
+        py += (hashXY(gx, gy, 2) - 0.5) * cellH * 0.45;
+      }
+      const isGrass = hashXY(gx, gy, 99) > 0.35;
+      pts.push({ x: px, y: py, grass: isGrass, gx, gy });
+    }
+
+    const getIdx = (gx, gy) => gy * (gridW + 1) + gx;
+
+    ctx.lineWidth = 1; ctx.strokeStyle = '#30363d';
+    for (let gy = 0; gy < gridH; gy++) for (let gx = 0; gx < gridW; gx++) {
+      const bl = pts[getIdx(gx, gy)], br = pts[getIdx(gx + 1, gy)];
+      const tl = pts[getIdx(gx, gy + 1)], tr = pts[getIdx(gx + 1, gy + 1)];
+      ctx.beginPath();
+      ctx.moveTo(bl.x, bl.y); ctx.lineTo(br.x, br.y);
+      ctx.lineTo(tr.x, tr.y); ctx.lineTo(tl.x, tl.y);
+      ctx.closePath(); ctx.stroke();
+    }
+
+    for (const p of pts) {
+      ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = p.grass ? '#3fb950' : '#1a3a5a'; ctx.fill();
+      ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 1; ctx.stroke();
+    }
+
+    if (showDual) {
+      for (let gy = 0; gy < gridH; gy++) for (let gx = 0; gx < gridW; gx++) {
+        const bl = pts[getIdx(gx, gy)], br = pts[getIdx(gx + 1, gy)];
+        const tl = pts[getIdx(gx, gy + 1)], tr = pts[getIdx(gx + 1, gy + 1)];
+        const bits = (bl.grass ? 1 : 0) | (br.grass ? 2 : 0) | (tr.grass ? 4 : 0) | (tl.grass ? 8 : 0);
+        const [tc] = lookup[bits];
+        if (tc === 0) continue;
+
+        const cx = (bl.x + br.x + tr.x + tl.x) / 4;
+        const cy = (bl.y + br.y + tr.y + tl.y) / 4;
+
+        ctx.beginPath();
+        ctx.moveTo(bl.x, bl.y); ctx.lineTo(br.x, br.y);
+        ctx.lineTo(tr.x, tr.y); ctx.lineTo(tl.x, tl.y);
+        ctx.closePath();
+        ctx.fillStyle = caseColors[tc] + '30'; ctx.fill();
+        ctx.strokeStyle = caseColors[tc] + '80'; ctx.lineWidth = 2; ctx.stroke();
+
+        ctx.fillStyle = caseColors[tc]; ctx.font = '11px ' + getComputedStyle(document.body).fontFamily;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(caseNames[tc], cx, cy);
+      }
+    }
+  }
+
+  drawGrid();
+
+  document.getElementById('btn-grid-regular').onclick = () => {
+    useIrregular = false;
+    document.getElementById('btn-grid-regular').classList.add('active');
+    document.getElementById('btn-grid-irregular').classList.remove('active');
+    drawGrid();
+  };
+  document.getElementById('btn-grid-irregular').onclick = () => {
+    useIrregular = true;
+    document.getElementById('btn-grid-irregular').classList.add('active');
+    document.getElementById('btn-grid-regular').classList.remove('active');
+    drawGrid();
+  };
+  document.getElementById('btn-grid-toggle').onclick = () => { showDual = !showDual; drawGrid(); };
+
+  // Tile grid display
+  const tileGrid = document.getElementById('tile-grid-display');
+  tileGrid.innerHTML = '';
+  for (let bits = 0; bits < 16; bits++) {
+    const [tc, rot] = lookup[bits];
+    const div = document.createElement('div');
+    div.className = 'tile-cell';
+    div.style.background = caseColors[tc] + '25';
+    const cv2 = document.createElement('canvas');
+    cv2.width = 40; cv2.height = 40;
+    const c2 = cv2.getContext('2d');
+    const corners = [bits & 1, bits & 2, bits & 4, bits & 8];
+    const cx2 = [[4, 36], [36, 36], [36, 4], [4, 4]];
+    for (let ci = 0; ci < 4; ci++) {
+      c2.beginPath(); c2.arc(cx2[ci][0], cx2[ci][1], 5, 0, Math.PI * 2);
+      c2.fillStyle = corners[ci] ? '#3fb950' : '#1a3a5a'; c2.fill();
+    }
+    c2.fillStyle = '#fff'; c2.font = '9px monospace'; c2.textAlign = 'center';
+    c2.fillText(`${tc}r${rot}`, 20, 23);
+    div.appendChild(cv2);
+    div.title = `bits=${bits.toString(2).padStart(4,'0')} → case ${tc}, rot ${rot}`;
+    tileGrid.appendChild(div);
+  }
+
+  const legend = document.getElementById('case-legend');
+  legend.innerHTML = '';
+  for (let i = 0; i < 6; i++) {
+    const span = document.createElement('span');
+    span.className = 'case-badge';
+    span.style.background = caseColors[i] + '40'; span.style.color = caseColors[i];
+    span.textContent = `${i}: ${caseNames[i]}`;
+    legend.appendChild(span);
+  }
+};
+
+// ============================================================
+//  SLIDE 4: SURFACE CASE DEMO
+// ============================================================
+slideInits[4] = function initSurface() {
+
+  const cv = document.getElementById('cv-surface');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const cornerState = [0, 1, 1, 0]; // BL, BR, TR, TL: 0=grass, 1=stone
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0a1628'; ctx.fillRect(0, 0, W, H);
+
+    const margin = 60, tw = W - margin * 2, th = H - margin * 2;
+    const cx = [[margin, H - margin], [W - margin, H - margin], [W - margin, margin], [margin, margin]];
+
+    // Draw tile
+    ctx.beginPath();
+    ctx.moveTo(cx[0][0], cx[0][1]);
+    for (let i = 1; i < 4; i++) ctx.lineTo(cx[i][0], cx[i][1]);
+    ctx.closePath();
+
+    // Fill with grass/stone blend
+    const img = ctx.createImageData(W, H);
+    for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
+      const u = (px - margin) / tw, v = 1 - (py - margin) / th;
+      if (u < -0.05 || u > 1.05 || v < -0.05 || v > 1.05) continue;
+      const s0 = cornerState[0] * (1 - u) * (1 - v) + cornerState[1] * u * (1 - v) +
+                  cornerState[2] * u * v + cornerState[3] * (1 - u) * v;
+      const stone = smoothstep(0.3, 0.7, s0);
+      const i = (py * W + px) * 4;
+      img.data[i] = stone * 150 + (1 - stone) * 55;
+      img.data[i + 1] = stone * 140 + (1 - stone) * 130;
+      img.data[i + 2] = stone * 130 + (1 - stone) * 35;
+      img.data[i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+
+    // Border
+    ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx[0][0], cx[0][1]);
+    for (let i = 1; i < 4; i++) ctx.lineTo(cx[i][0], cx[i][1]);
+    ctx.closePath(); ctx.stroke();
+
+    // Edge paths (arrows between adjacent tile centers)
+    const tileCx = W / 2, tileCy = H / 2;
+    const neighborDirs = [[0, 1], [1, 0], [0, -1], [-1, 0]]; // S, E, N, W
+    const edgeNames = ['S', 'E', 'N', 'W'];
+    const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e'];
+
+    for (let e = 0; e < 4; e++) {
+      const [dx, dy] = neighborDirs[e];
+      const ex = tileCx + dx * (tw / 2 + 30), ey = tileCy - dy * (th / 2 + 30);
+      ctx.beginPath();
+      ctx.moveTo(tileCx + dx * tw * 0.2, tileCy - dy * th * 0.2);
+      ctx.lineTo(tileCx + dx * tw * 0.45, tileCy - dy * th * 0.45);
+      ctx.strokeStyle = edgeColors[e] + '60'; ctx.lineWidth = 2; ctx.setLineDash([4,4]); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = edgeColors[e]; ctx.font = 'bold 14px monospace';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(edgeNames[e], tileCx + dx * tw * 0.52, tileCy - dy * th * 0.52);
+    }
+
+    // Corner dots (clickable)
+    const labels = ['BL', 'BR', 'TR', 'TL'];
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath(); ctx.arc(cx[i][0], cx[i][1], 16, 0, Math.PI * 2);
+      ctx.fillStyle = cornerState[i] ? '#8b8b8b' : '#3fb950';
+      ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(labels[i], cx[i][0], cx[i][1]);
+    }
+
+    // Surface case label
+    const bits = cornerState[0] | (cornerState[1] << 1) | (cornerState[2] << 2) | (cornerState[3] << 3);
+    ctx.fillStyle = '#58a6ff'; ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(`SurfaceCase: ${bits.toString(2).padStart(4, '0')} (${bits})`, W / 2, 30);
+    const paths = [0, 2, 2, 4, 2, 4, 4, 2, 2, 4, 4, 2, 4, 2, 2, 0][bits];
+    ctx.fillStyle = '#8b949e'; ctx.font = '13px sans-serif';
+    ctx.fillText(`${paths} edge paths needed`, W / 2, 50);
+  }
+
+  draw();
+
+  cv.onclick = (e) => {
+    const rect = cv.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * cv.width / rect.width;
+    const my = (e.clientY - rect.top) * cv.height / rect.height;
+    const margin = 60;
+    const cx = [[margin, H - margin], [W - margin, H - margin], [W - margin, margin], [margin, margin]];
+    for (let i = 0; i < 4; i++) {
+      if (Math.sqrt((mx - cx[i][0]) ** 2 + (my - cx[i][1]) ** 2) < 20) {
+        cornerState[i] = 1 - cornerState[i];
+        draw();
+        return;
+      }
+    }
+  };
+};
+
+// ============================================================
+//  SLIDE 5: CRACK DETECTION DEMO
+// ============================================================
+slideInits[5] = function initCracks() {
+
+  const SIZE = 128, CSIZE = 280;
+  const height = generateStoneHeight(SIZE, SIZE, 42);
+
+  function update() {
+    const blurMip = parseFloat(document.getElementById('sl-blur-mip').value);
+    const midpoint = parseFloat(document.getElementById('sl-midpoint').value);
+    const spread = parseFloat(document.getElementById('sl-spread').value);
+    document.getElementById('v-blur-mip').textContent = blurMip.toFixed(1);
+    document.getElementById('v-midpoint').textContent = midpoint.toFixed(3);
+    document.getElementById('v-spread').textContent = spread.toFixed(3);
+
+    const radius = Math.round(Math.pow(2, blurMip - 1));
+    const blurred = boxBlur(height, SIZE, SIZE, radius);
+
+    drawHeatmap(
+      document.getElementById('cv-height').getContext('2d'),
+      height, SIZE, SIZE, CSIZE, CSIZE
+    );
+
+    drawHeatmap(
+      document.getElementById('cv-blur').getContext('2d'),
+      blurred, SIZE, SIZE, CSIZE, CSIZE
+    );
+
+    const crackVis = new Float32Array(SIZE * SIZE);
+    for (let i = 0; i < SIZE * SIZE; i++) {
+      const depth = blurred[i] - height[i];
+      crackVis[i] = smoothstep(midpoint - spread / 2, midpoint + spread / 2, depth);
+    }
+
+    drawHeatmap(
+      document.getElementById('cv-cracks').getContext('2d'),
+      crackVis, SIZE, SIZE, CSIZE, CSIZE,
+      v => [v * 50 + (1 - v) * 140, v * 180 + (1 - v) * 140, v * 30 + (1 - v) * 130]
+    );
+  }
+
+  update();
+  document.getElementById('sl-blur-mip').oninput = update;
+  document.getElementById('sl-midpoint').oninput = update;
+  document.getElementById('sl-spread').oninput = update;
+};
+
+// ============================================================
+//  SLIDE 6: CENTER SNAPPING DEMO
+// ============================================================
+slideInits[6] = function initCenters() {
+
+  const cv = document.getElementById('cv-centers');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const SIZE = 128;
+  let seed = 42;
+
+  function draw() {
+    seed = Math.floor(Math.random() * 10000);
+    const height = generateStoneHeight(SIZE, SIZE, seed);
+    const radius = parseInt(document.getElementById('sl-search-rad').value);
+    document.getElementById('v-search-rad').textContent = radius;
+
+    const blurred = boxBlur(height, SIZE, SIZE, 4);
+
+    // Draw background: stone texture with crack overlay
+    const img = ctx.createImageData(W, H);
+    for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
+      const u = px / W, v = py / H;
+      const sx = Math.floor(u * SIZE), sy = Math.floor(v * SIZE);
+      const idx = sy * SIZE + sx;
+      const hv = height[idx], bv = blurred[idx];
+      const depth = bv - hv;
+      const inCrack = smoothstep(0.02, 0.1, depth);
+      const i = (py * W + px) * 4;
+      img.data[i] = hv * 150 * (1 - inCrack * 0.3);
+      img.data[i + 1] = hv * 140 * (1 - inCrack * 0.2) + inCrack * 40;
+      img.data[i + 2] = hv * 130 * (1 - inCrack * 0.3) + inCrack * 20;
+      img.data[i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+
+    // Simulate 4 tile centers
+    const tiles = [
+      { gx: 0.25, gy: 0.25 }, { gx: 0.75, gy: 0.25 },
+      { gx: 0.25, gy: 0.75 }, { gx: 0.75, gy: 0.75 }
+    ];
+
+    for (const tile of tiles) {
+      const gcx = tile.gx * W, gcy = tile.gy * H;
+      const step = W * 0.5 / SIZE;
+
+      let bestScore = 1e10, bestX = gcx, bestY = gcy;
+      for (let dr = -radius; dr <= radius; dr++) for (let dc = -radius; dc <= radius; dc++) {
+        const sx = Math.floor(tile.gx * SIZE + dc * 0.5);
+        const sy = Math.floor(tile.gy * SIZE + dr * 0.5);
+        if (sx < 0 || sx >= SIZE || sy < 0 || sy >= SIZE) continue;
+        const idx = sy * SIZE + sx;
+        const hv = height[idx], bv = blurred[idx];
+        const depth = bv - hv;
+        const inCrack = smoothstep(0.02, 0.1, depth);
+        const isStone = inCrack < 0.5 ? 1 : 0;
+        const dist = Math.sqrt(dc * dc + dr * dr) / radius;
+        const score = isStone * 1000 + dist;
+        if (score < bestScore) {
+          bestScore = score;
+          bestX = sx / SIZE * W; bestY = sy / SIZE * H;
+        }
+      }
+
+      // Search area
+      ctx.strokeStyle = '#ffffff20';
+      ctx.strokeRect(gcx - radius * step, gcy - radius * step, radius * 2 * step, radius * 2 * step);
+
+      // Geometric center (red)
+      ctx.beginPath(); ctx.arc(gcx, gcy, 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#f8514990'; ctx.fill();
+      ctx.strokeStyle = '#f85149'; ctx.lineWidth = 2; ctx.stroke();
+
+      // Arrow
+      ctx.beginPath(); ctx.moveTo(gcx, gcy); ctx.lineTo(bestX, bestY);
+      ctx.strokeStyle = '#ffffff60'; ctx.lineWidth = 1; ctx.setLineDash([3,3]); ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Snapped center (green)
+      ctx.beginPath(); ctx.arc(bestX, bestY, 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#3fb95090'; ctx.fill();
+      ctx.strokeStyle = '#3fb950'; ctx.lineWidth = 2; ctx.stroke();
+    }
+
+    // Legend
+    ctx.fillStyle = '#f85149'; ctx.beginPath(); ctx.arc(15, 15, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#8b949e'; ctx.font = '12px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText('Geometric center', 25, 19);
+    ctx.fillStyle = '#3fb950'; ctx.beginPath(); ctx.arc(15, 35, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#8b949e'; ctx.fillText('Crack-snapped center', 25, 39);
+  }
+
+  draw();
+  document.getElementById('btn-centers-regen').onclick = draw;
+  document.getElementById('sl-search-rad').oninput = () => {
+    document.getElementById('v-search-rad').textContent = document.getElementById('sl-search-rad').value;
+    draw();
+  };
+};
+
+// ============================================================
+//  SLIDE 7: PATHFINDING DEMO
+// ============================================================
+slideInits[7] = function initPathfind() {
+
+  const cv = document.getElementById('cv-pathfind');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const SIZE = 128;
+  const LANES = 64, STEPS = 65;
+  const MAX_STEP = 3;
+
+  const height = generateStoneHeight(SIZE, SIZE, 77);
+  const blurred = boxBlur(height, SIZE, SIZE, 4);
+
+  const centerA = { u: 0.2, v: 0.5 }, centerB = { u: 0.8, v: 0.5 };
+  let costRatio = 20;
+  let dpState = null, animFrame = null, playing = false;
+
+  function getCost(u, v) {
+    const sx = Math.max(0, Math.min(SIZE - 1, Math.floor(u * SIZE)));
+    const sy = Math.max(0, Math.min(SIZE - 1, Math.floor(v * SIZE)));
+    const idx = sy * SIZE + sx;
+    const depth = blurred[idx] - height[idx];
+    const inCrack = smoothstep(0.02, 0.1, depth);
+    return inCrack * 1 + (1 - inCrack) * costRatio;
+  }
+
+  function initDP() {
+    const du = centerB.u - centerA.u, dv = centerB.v - centerA.v;
+    const len = Math.sqrt(du * du + dv * dv);
+    const tx = du / len, ty = dv / len;
+    const nx = -ty, ny = tx;
+    const halfWidth = 0.18;
+
+    const dp = new Float32Array(STEPS * LANES).fill(1e10);
+    const trace = new Int32Array(STEPS * LANES);
+    const midlane = 32;
+
+    dp[midlane] = 0;
+    for (let l = 0; l < LANES; l++) trace[l] = l;
+
+    return { dp, trace, step: 0, tx, ty, nx, ny, len, halfWidth, midlane, path: null };
+  }
+
+  function stepDP(state) {
+    if (state.step >= STEPS) return false;
+    const s = state.step;
+    const t = s / (STEPS - 1);
+
+    for (let lane = 0; lane < LANES; lane++) {
+      const perpOff = ((lane / (LANES - 1)) * 2 - 1) * state.halfWidth;
+      const u = centerA.u + state.tx * t * state.len + state.nx * perpOff;
+      const v = centerA.v + state.ty * t * state.len + state.ny * perpOff;
+      const cellCost = getCost(u, v) + Math.abs(lane - state.midlane) / LANES * 2;
+
+      if (s === 0) {
+        state.dp[s * LANES + lane] = (lane === state.midlane ? 0 : 1e10) + cellCost;
+        state.trace[s * LANES + lane] = lane;
+      } else {
+        let best = 1e10, bestFrom = lane;
+        for (let dr = 0; dr <= MAX_STEP; dr++) {
+          const penalty = dr * 0.5;
+          for (let sign = 1; sign >= -1; sign -= 2) {
+            if (dr === 0 && sign === -1) continue;
+            const from = lane + dr * sign;
+            if (from < 0 || from >= LANES) continue;
+            const c = state.dp[(s - 1) * LANES + from] + cellCost + penalty;
+            if (c < best) { best = c; bestFrom = from; }
+          }
+        }
+        state.dp[s * LANES + lane] = best;
+        state.trace[s * LANES + lane] = bestFrom;
+      }
+    }
+    state.step++;
+
+    if (state.step >= STEPS) {
+      state.path = new Int32Array(STEPS);
+      let cur = state.midlane;
+      for (let s2 = STEPS - 1; s2 >= 0; s2--) {
+        state.path[s2] = cur;
+        cur = state.trace[s2 * LANES + cur];
+      }
+    }
+    return true;
+  }
+
+  function drawPath() {
+    // Background cost field
+    const img = ctx.createImageData(W, H);
+    for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
+      const u = px / W, v = py / H;
+      const cost = getCost(u, v);
+      const norm = Math.min(1, cost / costRatio);
+      const i = (py * W + px) * 4;
+      img.data[i] = norm * 120 + (1 - norm) * 20;
+      img.data[i + 1] = (1 - norm) * 100 + norm * 30;
+      img.data[i + 2] = (1 - norm) * 60 + norm * 20;
+      img.data[i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+
+    if (!dpState) return;
+
+    // Draw DP band
+    ctx.globalAlpha = 0.3;
+    for (let s = 0; s < Math.min(dpState.step, STEPS); s++) {
+      const t = s / (STEPS - 1);
+      for (let lane = 0; lane < LANES; lane++) {
+        const perpOff = ((lane / (LANES - 1)) * 2 - 1) * dpState.halfWidth;
+        const px = (centerA.u + dpState.tx * t * dpState.len + dpState.nx * perpOff) * W;
+        const py = (centerA.v + dpState.ty * t * dpState.len + dpState.ny * perpOff) * H;
+        const cost = dpState.dp[s * LANES + lane];
+        if (cost > 1e9) continue;
+        const maxCost = dpState.step * costRatio * 0.3;
+        const norm = Math.min(1, cost / maxCost);
+        ctx.fillStyle = `hsl(${(1 - norm) * 120}, 80%, ${40 + norm * 20}%)`;
+        ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    // Sweep line
+    if (dpState.step > 0 && dpState.step < STEPS) {
+      const t = (dpState.step - 1) / (STEPS - 1);
+      const sx = (centerA.u + dpState.tx * t * dpState.len) * W;
+      const sy = (centerA.v + dpState.ty * t * dpState.len) * H;
+      ctx.beginPath();
+      ctx.moveTo(sx + dpState.nx * dpState.halfWidth * W, sy + dpState.ny * dpState.halfWidth * H);
+      ctx.lineTo(sx - dpState.nx * dpState.halfWidth * W, sy - dpState.ny * dpState.halfWidth * H);
+      ctx.strokeStyle = '#ffffff80'; ctx.lineWidth = 1; ctx.stroke();
+    }
+
+    // Path
+    if (dpState.path) {
+      ctx.beginPath();
+      for (let s = 0; s < STEPS; s++) {
+        const t = s / (STEPS - 1);
+        const lane = dpState.path[s];
+        const perpOff = ((lane / (LANES - 1)) * 2 - 1) * dpState.halfWidth;
+        const px = (centerA.u + dpState.tx * t * dpState.len + dpState.nx * perpOff) * W;
+        const py = (centerA.v + dpState.ty * t * dpState.len + dpState.ny * perpOff) * H;
+        if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 3; ctx.stroke();
+    }
+
+    // Centers
+    ctx.beginPath(); ctx.arc(centerA.u * W, centerA.v * H, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#3fb950'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.beginPath(); ctx.arc(centerB.u * W, centerB.v * H, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#3fb950'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+
+    ctx.fillStyle = '#8b949e'; ctx.font = '11px monospace';
+    ctx.textAlign = 'left'; ctx.fillText(`Step: ${dpState.step}/${STEPS}`, 8, H - 8);
+  }
+
+  function reset() {
+    playing = false;
+    if (animFrame) cancelAnimationFrame(animFrame);
+    costRatio = parseInt(document.getElementById('sl-cost-ratio').value);
+    dpState = initDP();
+    drawPath();
+  }
+
+  function animate() {
+    const speed = parseInt(document.getElementById('sl-path-speed').value);
+    for (let i = 0; i < speed; i++) {
+      if (!stepDP(dpState)) { playing = false; break; }
+    }
+    drawPath();
+    if (playing) animFrame = requestAnimationFrame(animate);
+  }
+
+  document.getElementById('btn-path-play').onclick = () => {
+    if (dpState && dpState.step >= STEPS) reset();
+    playing = !playing;
+    if (playing) animate();
+  };
+  document.getElementById('btn-path-step').onclick = () => {
+    playing = false;
+    if (!dpState || dpState.step >= STEPS) { dpState = initDP(); }
+    stepDP(dpState); drawPath();
+  };
+  document.getElementById('btn-path-reset').onclick = reset;
+  document.getElementById('sl-cost-ratio').oninput = () => {
+    document.getElementById('v-cost-ratio').textContent = document.getElementById('sl-cost-ratio').value;
+  };
+  document.getElementById('sl-path-speed').oninput = () => {
+    document.getElementById('v-path-speed').textContent = document.getElementById('sl-path-speed').value;
+  };
+
+  reset();
+};
+
+// ============================================================
+//  SLIDE 8: FLAP FOLDING DEMO
+// ============================================================
+slideInits[8] = function initFlaps() {
+
+  const cv = document.getElementById('cv-flaps');
+  const ctx = cv.getContext('2d');
+  const S = cv.width;
+  const cornerColors = [
+    [255, 150, 50],  // BL = orange (W edge)
+    [255, 220, 50],  // BR = yellow (S edge)
+    [50, 220, 200],  // TR = cyan (E edge)
+    [200, 120, 255]  // TL = purple (N edge)
+  ];
+  const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e']; // S, E, N, W
+  const edgeNames = ['S (→BR)', 'E (→TR)', 'N (→TL)', 'W (→BL)'];
+  const sectorCorner = [1, 2, 3, 0]; // S→BR, E→TR, N→TL, W→BL
+
+  let paths = [];
+  let showPaths = true;
+  let animStep = -1, animFrame = null;
+
+  function genPaths() {
+    paths = [];
+    for (let e = 0; e < 4; e++) {
+      const pts = [];
+      const N = 32;
+      for (let i = 0; i <= N; i++) {
+        const t = i / N;
+        let base, perp;
+        if (e === 0) { base = { x: t, y: 0 }; perp = { x: 0, y: 1 }; }      // S
+        else if (e === 1) { base = { x: 1, y: t }; perp = { x: -1, y: 0 }; }  // E
+        else if (e === 2) { base = { x: 1 - t, y: 1 }; perp = { x: 0, y: -1 }; } // N
+        else { base = { x: 0, y: 1 - t }; perp = { x: 1, y: 0 }; }            // W
+        const wobble = Math.sin(t * Math.PI * 2 + hashXY(e, 0, 42) * 10) * 0.12
+                      + Math.sin(t * Math.PI * 3.7 + hashXY(e, 1, 42) * 10) * 0.06;
+        pts.push({ x: base.x + perp.x * (0.5 + wobble), y: base.y + perp.y * (0.5 + wobble) });
+      }
+      paths.push(pts);
+    }
+  }
+
+  function sideOfPath(pathIdx, px, py) {
+    const pts = paths[pathIdx];
+    let bestDist = Infinity, bestSide = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const ax = pts[i].x, ay = pts[i].y, bx = pts[i + 1].x, by = pts[i + 1].y;
+      const dx = bx - ax, dy = by - ay;
+      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+      const cx = ax + t * dx, cy = ay + t * dy;
+      const dist = Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
+      const side = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+      if (dist < bestDist) { bestDist = dist; bestSide = side; }
+    }
+    return bestSide;
+  }
+
+  function classify(px, py, upToEdge) {
+    const limit = upToEdge !== undefined ? upToEdge + 1 : 4;
+    let assigned = 0;
+    const sides = [];
+    for (let i = 0; i < 4; i++) sides.push(sideOfPath(i, px, py));
+
+    for (let i = 1; i < limit; i++) {
+      if (sides[i] <= 0) continue;
+      if (i === 3 && assigned === 0 && sides[0] > 0) continue;
+      assigned = i;
+    }
+    return sectorCorner[assigned];
+  }
+
+  function draw(upToEdge) {
+    const margin = 30;
+    const tileS = S - margin * 2;
+
+    ctx.clearRect(0, 0, S, S);
+    ctx.fillStyle = '#0a1628'; ctx.fillRect(0, 0, S, S);
+
+    // Classification
+    const img = ctx.createImageData(S, S);
+    for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
+      const u = (px - margin) / tileS, v = (py - margin) / tileS;
+      const i = (py * S + px) * 4;
+      if (u < 0 || u > 1 || v < 0 || v > 1) {
+        img.data[i] = 13; img.data[i+1] = 17; img.data[i+2] = 23; img.data[i+3] = 255;
+        continue;
+      }
+      const corner = classify(u, v, upToEdge);
+      const [r, g, b] = cornerColors[corner];
+      img.data[i] = r; img.data[i+1] = g; img.data[i+2] = b; img.data[i+3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+
+    // Tile border
+    ctx.strokeStyle = '#ffffff40'; ctx.lineWidth = 1;
+    ctx.strokeRect(margin, margin, tileS, tileS);
+
+    // Edge paths
+    if (showPaths) {
+      for (let e = 0; e < Math.min(paths.length, upToEdge !== undefined ? upToEdge + 1 : 4); e++) {
+        ctx.beginPath();
+        for (let i = 0; i < paths[e].length; i++) {
+          const px = margin + paths[e][i].x * tileS, py = margin + paths[e][i].y * tileS;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.strokeStyle = edgeColors[e]; ctx.lineWidth = 3; ctx.stroke();
+      }
+    }
+
+    // Corner labels
+    const cornerPos = [[margin + 15, S - margin - 10], [S - margin - 15, S - margin - 10],
+                        [S - margin - 15, margin + 18], [margin + 15, margin + 18]];
+    const cornerLabels = ['BL', 'BR', 'TR', 'TL'];
+    for (let i = 0; i < 4; i++) {
+      ctx.fillStyle = `rgb(${cornerColors[i]})`; ctx.font = 'bold 14px monospace';
+      ctx.textAlign = 'center'; ctx.fillText(cornerLabels[i], cornerPos[i][0], cornerPos[i][1]);
+    }
+
+    // Edge labels on outside
+    if (showPaths) {
+      const limit = upToEdge !== undefined ? upToEdge + 1 : 4;
+      for (let e = 0; e < limit; e++) {
+        ctx.fillStyle = edgeColors[e]; ctx.font = '12px monospace'; ctx.textAlign = 'center';
+        const pos = [
+          [S/2, S - margin + 15], [S - margin + 20, S/2], [S/2, margin - 8], [margin - 10, S/2]
+        ];
+        ctx.fillText(edgeNames[e], pos[e][0], pos[e][1]);
+      }
+    }
+  }
+
+  genPaths();
+  draw();
+
+  let animating = false;
+  document.getElementById('btn-flap-animate').onclick = () => {
+    if (animating) return;
+    animating = true;
+    animStep = 0;
+    function step() {
+      draw(animStep);
+      if (animStep < 3) {
+        animStep++;
+        setTimeout(step, 800);
+      } else {
+        animating = false;
+      }
+    }
+    step();
+  };
+  document.getElementById('btn-flap-regen').onclick = () => { genPaths(); draw(); };
+  document.getElementById('chk-flap-paths').onchange = (e) => { showPaths = e.target.checked; draw(); };
+};
+
+// ============================================================
+//  SLIDE 9: MASK GENERATION DEMO
+// ============================================================
+slideInits[9] = function initMask() {
+
+  const SIZE = 128, CSIZE = 260;
+  let seed = 55;
+
+  function genMask() {
+    seed = Math.floor(Math.random() * 10000);
+    const height = generateStoneHeight(SIZE, SIZE, seed);
+    const blurred = boxBlur(height, SIZE, SIZE, 4);
+
+    // Create 4 paths (simulated crack-following edge paths)
+    const paths = [];
+    for (let e = 0; e < 4; e++) {
+      const pts = [];
+      for (let i = 0; i <= 32; i++) {
+        const t = i / 32;
+        let bx, by, nx, ny;
+        if (e === 0) { bx = t; by = 0; nx = 0; ny = 1; }
+        else if (e === 1) { bx = 1; by = t; nx = -1; ny = 0; }
+        else if (e === 2) { bx = 1 - t; by = 1; nx = 0; ny = -1; }
+        else { bx = 0; by = 1 - t; nx = 1; ny = 0; }
+
+        // Sample crack field for wobble
+        const su = Math.floor(bx * SIZE), sv = Math.floor(by * SIZE);
+        const idx = Math.max(0, Math.min(SIZE * SIZE - 1, sv * SIZE + su));
+        const depth = blurred[idx] - height[idx];
+        const wobble = depth * 1.5 + Math.sin(t * Math.PI * 3 + e * 2.1) * 0.08;
+        pts.push({ x: bx + nx * (0.5 + wobble * 0.3), y: by + ny * (0.5 + wobble * 0.3) });
+      }
+      paths.push(pts);
+    }
+
+    function sideOfPath(pathIdx, px, py) {
+      const pts = paths[pathIdx];
+      let bestDist = Infinity, bestSide = 0;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const ax = pts[i].x, ay = pts[i].y, bx = pts[i + 1].x, by = pts[i + 1].y;
+        const dx = bx - ax, dy = by - ay;
+        const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+        const cx2 = ax + t * dx, cy2 = ay + t * dy;
+        const dist = Math.sqrt((px - cx2) ** 2 + (py - cy2) ** 2);
+        const side = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+        if (dist < bestDist) { bestDist = dist; bestSide = side; }
+      }
+      return bestSide;
+    }
+
+    const sectorCorner = [1, 2, 3, 0];
+    const cornerStone = [0, 1, 1, 0]; // BL=grass, BR=stone, TR=stone, TL=grass
+
+    // Raw classification mask
+    const rawMask = new Float32Array(SIZE * SIZE);
+    for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
+      const u = x / SIZE, v = y / SIZE;
+      const sides = [];
+      for (let e = 0; e < 4; e++) sides.push(sideOfPath(e, u, v));
+      let assigned = 0;
+      for (let i = 1; i < 4; i++) {
+        if (sides[i] <= 0) continue;
+        if (i === 3 && assigned === 0 && sides[0] > 0) continue;
+        assigned = i;
+      }
+      rawMask[y * SIZE + x] = cornerStone[sectorCorner[assigned]];
+    }
+
+    const blurRadius = parseInt(document.getElementById('sl-mask-blur').value);
+    const blurredMask = gaussBlur(rawMask, SIZE, SIZE, blurRadius);
+
+    // Draw raw
+    drawHeatmap(
+      document.getElementById('cv-mask-raw').getContext('2d'),
+      rawMask, SIZE, SIZE, CSIZE, CSIZE,
+      v => v > 0.5 ? [180, 170, 155] : [55, 130, 35]
+    );
+
+    // Draw blurred
+    drawHeatmap(
+      document.getElementById('cv-mask-blur').getContext('2d'),
+      blurredMask, SIZE, SIZE, CSIZE, CSIZE,
+      v => {
+        const s = smoothstep(0.2, 0.8, v);
+        return [s * 180 + (1 - s) * 55, s * 170 + (1 - s) * 130, s * 155 + (1 - s) * 35];
+      }
+    );
+
+    // Draw applied
+    const ctx = document.getElementById('cv-mask-applied').getContext('2d');
+    const img = ctx.createImageData(CSIZE, CSIZE);
+    for (let py = 0; py < CSIZE; py++) for (let px = 0; px < CSIZE; px++) {
+      const u = px / CSIZE, v = py / CSIZE;
+      const sx = Math.floor(u * SIZE), sy = Math.floor(v * SIZE);
+      const idx = sy * SIZE + sx;
+      const stone = smoothstep(0.2, 0.8, blurredMask[idx]);
+      const hv = height[idx];
+      const depth = blurred[idx] - hv;
+      const moss = smoothstep(0.02, 0.1, depth) * stone * 0.4;
+
+      const stR = hv * 160 + 40, stG = hv * 140 + 35, stB = hv * 130 + 30;
+      const mR = stR * (1 - moss) + 45 * moss;
+      const mG = stG * (1 - moss) + 76 * moss;
+      const mB = stB * (1 - moss) + 30 * moss;
+      const gR = 55 + fbm(u * 12, v * 12, 2, 99) * 30;
+      const gG = 120 + fbm(u * 12, v * 12, 2, 100) * 40;
+      const gB = 30 + fbm(u * 12, v * 12, 2, 101) * 20;
+
+      const i = (py * CSIZE + px) * 4;
+      img.data[i] = mR * stone + gR * (1 - stone);
+      img.data[i + 1] = mG * stone + gG * (1 - stone);
+      img.data[i + 2] = mB * stone + gB * (1 - stone);
+      img.data[i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  genMask();
+  document.getElementById('sl-mask-blur').oninput = () => {
+    document.getElementById('v-mask-blur').textContent = document.getElementById('sl-mask-blur').value;
+    genMask();
+  };
+  document.getElementById('btn-mask-regen').onclick = genMask;
+};
+
+// ============================================================
+//  SLIDE 12: FINAL RESULT DEMO
+// ============================================================
+slideInits[12] = function initFinal() {
+
+  const cv = document.getElementById('cv-final');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const TW = 256, TH = 128;
+
+  const height = generateStoneHeight(TW, TH, 123);
+  const blurred = boxBlur(height, TW, TH, 6);
+
+  // Create a multi-tile terrain with some tiles stone, some grass
+  const tilesX = 6, tilesY = 3;
+  const tileStone = [];
+  for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) {
+    tileStone.push(hashXY(tx, ty, 777) > 0.5 ? 1 : 0);
+  }
+
+  const img = ctx.createImageData(W, H);
+  for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
+    const u = px / W, v = py / H;
+    const sx = Math.floor(u * TW) % TW, sy = Math.floor(v * TH) % TH;
+    const idx = sy * TW + sx;
+    const hv = height[idx], bv = blurred[idx];
+    const depth = bv - hv;
+    const inCrack = smoothstep(0.02, 0.1, depth);
+
+    // Tile lookup
+    const tx = Math.floor(u * tilesX), ty = Math.floor(v * tilesY);
+    const tIdx = ty * tilesX + tx;
+    const lu = u * tilesX - tx, lv = v * tilesY - ty;
+
+    // Neighbor averaging for smooth transition
+    let stoneAvg = 0, wt = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const nx = tx + dx, ny = ty + dy;
+      if (nx < 0 || nx >= tilesX || ny < 0 || ny >= tilesY) continue;
+      const dist = Math.sqrt(((lu + dx) * 0.5) ** 2 + ((lv + dy) * 0.5) ** 2);
+      const w = Math.exp(-dist * 3);
+      stoneAvg += tileStone[ny * tilesX + nx] * w;
+      wt += w;
+    }
+    stoneAvg /= wt;
+
+    // Crack-aware transition
+    const crackBias = inCrack * 0.3 - 0.15;
+    const stone = smoothstep(0.3 + crackBias, 0.7 + crackBias, stoneAvg);
+    const moss = inCrack * stone * 0.35;
+
+    const stR = hv * 165 + 35, stG = hv * 145 + 30, stB = hv * 135 + 25;
+    const mR = stR * (1 - moss) + 45 * moss;
+    const mG = stG * (1 - moss) + 80 * moss;
+    const mB = stB * (1 - moss) + 28 * moss;
+    const gR = 50 + fbm(u * 15, v * 15, 2, 99) * 35;
+    const gG = 115 + fbm(u * 15, v * 15, 2, 100) * 45;
+    const gB = 28 + fbm(u * 15, v * 15, 2, 101) * 22;
+
+    const i = (py * W + px) * 4;
+    img.data[i] = mR * stone + gR * (1 - stone);
+    img.data[i + 1] = mG * stone + gG * (1 - stone);
+    img.data[i + 2] = mB * stone + gB * (1 - stone);
+    img.data[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  ctx.strokeStyle = '#30363d'; ctx.lineWidth = 1;
+
+  // Tile grid overlay
+  for (let tx = 1; tx < tilesX; tx++) {
+    ctx.beginPath(); ctx.moveTo(tx / tilesX * W, 0); ctx.lineTo(tx / tilesX * W, H);
+    ctx.strokeStyle = '#ffffff10'; ctx.stroke();
+  }
+  for (let ty = 1; ty < tilesY; ty++) {
+    ctx.beginPath(); ctx.moveTo(0, ty / tilesY * H); ctx.lineTo(W, ty / tilesY * H);
+    ctx.strokeStyle = '#ffffff10'; ctx.stroke();
+  }
+};
+
+// ============================================================
+//  INIT
+// ============================================================
+goTo(0);
+</script>
+
+</body>
+</html>
