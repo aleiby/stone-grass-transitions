@@ -609,6 +609,7 @@ albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
   <h2>Summary</h2>
   <div class="content-block" style="text-align:center;">
     <canvas id="cv-final" width="700" height="360"></canvas>
+    <p id="final-hover-info" class="small" style="font-family:monospace; min-height:1.2em; color:var(--fg-muted);"></p>
     <div style="margin-top:1.5em;">
       <p style="font-size:1.1rem; color:var(--fg);">Stone–grass boundaries that follow natural texture features,<br>computed entirely on the GPU at load time.</p>
     </div>
@@ -1236,11 +1237,12 @@ function classifyPixel(u, v, td, opts) {
 
   const rawSides = [0, 0, 0, 0];
   const sLocal = [0, 0, 0, 0];
+  const sRaw = [0, 0, 0, 0];
   const sRangeMins = [0, 0, 0, 0];
   const sRangeMaxs = [1, 1, 1, 1];
   for (let e = 0; e < 4; e++) {
     const ed = td.edgeData[e];
-    if (!ed) { rawSides[e] = 0; sLocal[e] = -999; continue; }
+    if (!ed) { rawSides[e] = 0; sLocal[e] = -999; sRaw[e] = -999; continue; }
     const du2 = u - ed.cA.u, dv2 = v - ed.cA.v;
     const s = (du2 * ed.tx + dv2 * ed.ty) * ed.invLen;
     const t = du2 * ed.nx + dv2 * ed.ny;
@@ -1249,6 +1251,7 @@ function classifyPixel(u, v, td, opts) {
     const b0 = Math.floor(bf), b1 = Math.min(b0 + 1, td.NUM_BUCKETS - 1);
     const pathT = ed.tUpper[b0] + (ed.tUpper[b1] - ed.tUpper[b0]) * (bf - b0);
     rawSides[e] = (t - pathT) * ed.sref;
+    sRaw[e] = s;
     sLocal[e] = ed.sref < 0 ? 1 - s : s;
     const sMin = ed.sRangeMin !== undefined ? ed.sRangeMin : 0;
     const sMax = ed.sRangeMax !== undefined ? ed.sRangeMax : 1;
@@ -1259,8 +1262,8 @@ function classifyPixel(u, v, td, opts) {
   for (let i = 1; i < upToEdge; i++) {
     if (rawSides[i] <= 0) continue;
     if (useDomainGuard) {
-      const newInRange = sLocal[i] > sRangeMins[i] && sLocal[i] <= sRangeMaxs[i];
-      const curInRange = sLocal[assigned] > sRangeMins[assigned] && sLocal[assigned] <= sRangeMaxs[assigned] && rawSides[assigned] > 0;
+      const newInRange = sLocal[i] > sRangeMins[i];
+      const curInRange = sLocal[assigned] > sRangeMins[assigned] && rawSides[assigned] > 0;
       if (!newInRange && curInRange) continue;
     }
     if (useWrapGuard) {
@@ -1268,7 +1271,8 @@ function classifyPixel(u, v, td, opts) {
     }
     assigned = i;
   }
-  return { assigned, corner: td.sectorCorner[assigned], rawSides, sLocal, sRangeMins, sRangeMaxs };
+  const corner = td.sectorCorner[assigned];
+  return { assigned, corner, rawSides, sLocal, sRaw, sRangeMins, sRangeMaxs };
 }
 
 function drawHeatmap(ctx, data, w, h, cw, ch, colorFn) {
@@ -2922,9 +2926,20 @@ slideInits[14] = function initFinal() {
     for (let e = 0; e < 4; e++) {
       const ntx = tx + EDGE_DIRS[e][0], nty = ty + EDGE_DIRS[e][1];
       const needsPath = edgeNeedsPath(cornerStone, e);
-      // Only stone/grass boundary edges participate in the mask solve.
+      // Non-transition edges (same stone value on both corners) skip the
+      // expensive path solve but still participate in quadrant classification
+      // using the straight chord (t=0 for all s).  Without these, tiles with
+      // only 2 transition edges leave corner quadrants unclaimed.
       if (!needsPath) {
-        edgeData.push(null);
+        const edge = getSharedEdge(tx, ty, ntx, nty, false);
+        const straightData = edge.fwdData || buildStraightEdgeData(
+          { u: tx + 0.5, v: ty + 0.5 }, { u: ntx + 0.5, v: nty + 0.5 }, NUM_BUCKETS);
+        if (straightData) {
+          const sref = signedEdgeRefForCorner(edge.signFrame || straightData, cornerUVs[sectorCorner[e]]);
+          edgeData.push(withSignedRef(straightData, sref));
+        } else {
+          edgeData.push(null);
+        }
         paths.push([]);
         transitionEdges.push(false);
         continue;
@@ -2954,8 +2969,9 @@ slideInits[14] = function initFinal() {
     };
   }
 
+  let tileData = [];
   function render() {
-    const tileData = [];
+    tileData = [];
     for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) {
       tileData.push(buildTileSample(tx, ty));
     }
@@ -3020,6 +3036,25 @@ slideInits[14] = function initFinal() {
   }
 
   render();
+
+  const edgeNames = ['S','E','N','W'];
+  cv.onmousemove = (e) => {
+    const rect = cv.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) / rect.width, my = (e.clientY - rect.top) / rect.height;
+    if (mx < 0 || mx > 1 || my < 0 || my > 1) return;
+    const gu = mx * tilesX, gv = my * tilesY;
+    const tx = Math.min(tilesX-1, Math.floor(gu)), ty = Math.min(tilesY-1, Math.floor(gv));
+    const td = tileData[ty * tilesX + tx];
+    const r = classifyPixel(gu, gv, td, { domainGuard: true, wrapGuard: true, useSRangeMin: true });
+    const stoneVal = td.cornerStone[r.corner];
+    const info = document.getElementById('final-hover-info');
+    if (info) info.textContent =
+      `tile(${tx},${ty}) assigned=${edgeNames[r.assigned]} corner=${r.corner} stone=${stoneVal}`
+      + ` raw=[${r.rawSides.map(v=>v.toFixed(3)).join(',')}]`
+      + ` sRaw=[${r.sRaw ? r.sRaw.map(v=>v.toFixed(2)).join(',') : 'n/a'}]`
+      + ` s=[${r.sLocal.map(v=>v.toFixed(2)).join(',')}]`
+      + ` corners=[${td.cornerStone.join(',')}]`;
+  };
 };
 
 // ============================================================
