@@ -136,15 +136,18 @@ pre .str { color:var(--green); } pre .type { color:var(--cyan); }
 <div class="slides" id="slides">
 
 <!-- ==================== SLIDE 0: TITLE ==================== -->
-<section class="slide" id="s-title">
-  <h1>Stone–Grass Transitions via<br>Crack-Following Paths</h1>
-  <p class="subtitle">On Irregular Dual Grids</p>
-  <p style="text-align:center; color:var(--fg3); font-size:0.9rem; margin-top:1em;">
-    An engine-agnostic technique for natural material boundaries<br>
-    that follow features in the underlying stone texture
-  </p>
-  <div style="margin-top:2em; text-align:center;">
-    <p class="small">Use <kbd style="background:var(--bg3);padding:0.15em 0.5em;border-radius:3px;">&#8592;</kbd> <kbd style="background:var(--bg3);padding:0.15em 0.5em;border-radius:3px;">&#8594;</kbd> to navigate</p>
+<section class="slide" id="s-title" style="background:url('images/hero-screenshot.png') center/cover no-repeat;">
+  <div style="position:absolute;inset:0;background:rgba(13,17,23,0.78);"></div>
+  <div style="position:relative;display:flex;flex-direction:column;align-items:center;">
+    <h1>Stone–Grass Transitions via<br>Crack-Following Paths</h1>
+    <p class="subtitle">On Irregular Dual Grids</p>
+    <p style="text-align:center; color:var(--fg3); font-size:0.9rem; margin-top:1em;">
+      An engine-agnostic technique for natural material boundaries<br>
+      that follow features in the underlying stone texture
+    </p>
+    <div style="margin-top:2em; text-align:center;">
+      <p class="small">Use <kbd style="background:var(--bg3);padding:0.15em 0.5em;border-radius:3px;">&#8592;</kbd> <kbd style="background:var(--bg3);padding:0.15em 0.5em;border-radius:3px;">&#8594;</kbd> to navigate</p>
+    </div>
   </div>
 </section>
 
@@ -390,14 +393,19 @@ s_local = sref &lt; <span class="num">0</span> ? (<span class="num">1.0</span> -
       <div class="controls">
         <button id="btn-flap-step">Step</button>
         <button id="btn-flap-animate">Play All</button>
-        <button id="btn-flap-regen">New Paths</button>
+        <button id="btn-flap-regen">New Seed</button>
         <label>Show paths <input type="checkbox" id="chk-flap-paths" checked></label>
+        <label>t&prime; shading <input type="checkbox" id="chk-flap-tshade"></label>
         <span id="flap-step-label" style="color:var(--dim);font-size:0.85em;">All edges</span>
       </div>
+      <div id="flap-hover-info" style="color:var(--dim);font-size:0.8em;min-height:1.2em;margin-top:4px;"></div>
     </div>
     <div class="content-block" style="max-width:420px;">
-      <h3>Why not simple quadrants?</h3>
-      <p class="mb-1">Crack paths are curved, at arbitrary angles, and don't intersect at a single point. A fixed NE/SE/SW/NW split fails. Instead, we process edges <strong>S&#10132;E&#10132;N&#10132;W</strong> in sequence &mdash; each edge <em>overwrites</em> the previous classification for all pixels on its positive side.</p>
+      <h3>Like closing a box</h3>
+      <div style="display:flex;align-items:flex-start;gap:1em;margin-bottom:0.8em;">
+        <img src="images/box-flap-interlock.png" alt="Box flap interlock" style="width:140px;height:140px;border-radius:6px;flex-shrink:0;">
+        <p class="mb-1" style="margin:0;">Each edge claims its territory the way box flaps fold shut &mdash; one at a time, each overlapping the last. We process edges <strong>S&#10132;E&#10132;N&#10132;W</strong> in sequence; each edge <em>overwrites</em> the previous classification for every pixel on its positive side.</p>
+      </div>
 
       <h3>The core loop</h3>
       <p class="mb-1">Start assigned to the S edge. For each subsequent edge, if the pixel is on its positive side and passes the guards, that edge takes ownership.</p>
@@ -413,7 +421,7 @@ s_local = sref &lt; <span class="num">0</span> ? (<span class="num">1.0</span> -
 }
 corner = sector_corner[assigned];
 </pre>
-      <p class="small mt-1">Click <strong>Step</strong> to watch each edge claim its territory, or <strong>Play All</strong> to see the full sequence animate.</p>
+      <p class="small mt-1">Click <strong>Step</strong> to watch each edge claim its territory. Enable <strong>t&prime; shading</strong> to see distance from each crack path &mdash; brighter = further from the boundary.</p>
     </div>
   </div>
 </section>
@@ -427,15 +435,18 @@ corner = sector_corner[assigned];
       <div class="controls">
         <label><input type="checkbox" id="chk-guard-domain" checked> Domain guard</label>
         <label><input type="checkbox" id="chk-guard-wrap" checked> Wrap guard</label>
-        <button id="btn-guard-regen">New Paths</button>
+        <label><input type="checkbox" id="chk-guard-srangemin"> s_range_min</label>
+        <label><input type="checkbox" id="chk-guard-show-oor"> Show out-of-range</label>
+        <button id="btn-guard-regen">New Seed</button>
       </div>
+      <div id="guard-hover-info" style="color:var(--dim);font-size:0.8em;min-height:2.4em;margin-top:4px;"></div>
     </div>
     <div class="content-block" style="max-width:420px;">
       <h3>Domain guard</h3>
-      <p class="mb-1">Near a tile boundary, <code>s_local</code> approaches 1.0 &mdash; the pixel is closer to the <em>neighbor's</em> center than ours. The domain guard prevents an out-of-range edge from overwriting one that has a valid claim:</p>
+      <p class="mb-1">The path only covers part of the s-axis. Beyond <code>s_range_min</code> (the path's minimum s), data is extrapolated. The domain guard prevents an out-of-range edge from overwriting one with a valid claim:</p>
       <pre class="mt-1">
-<span class="type">bool</span> new_in_range = s_local[i] &gt; <span class="num">0.0</span>;
-<span class="type">bool</span> cur_in_range = s_local[assigned] &gt; <span class="num">0.0</span>
+<span class="type">bool</span> new_in_range = s_local[i] &gt; s_range_min[i];
+<span class="type">bool</span> cur_in_range = s_local[assigned] &gt; s_range_min[assigned]
                  &amp;&amp; raw_sides[assigned] &gt; <span class="num">0.0</span>;
 <span class="kw">if</span> (!new_in_range &amp;&amp; cur_in_range)
   <span class="kw">continue</span>;
@@ -447,7 +458,7 @@ corner = sector_corner[assigned];
     &amp;&amp; raw_sides[<span class="num">0</span>] &gt; <span class="num">0.0</span>)
   <span class="kw">continue</span>;
 </pre>
-      <p class="small mt-1">Toggle each guard off to see the artifacts it prevents. The domain guard avoids bleed from neighboring tiles; the wrap guard prevents S/W competition.</p>
+      <p class="small mt-1">Toggle each guard to see the artifacts it prevents. Enable <strong>s_range_min</strong> to use the path's actual coverage range instead of s&gt;0. <strong>Show out-of-range</strong> dims pixels outside the path's s domain.</p>
     </div>
   </div>
 </section>
@@ -831,6 +842,254 @@ function gaussBlur(src, w, h, radius) {
   return dst;
 }
 
+// Shared tile data builder: runs the full crack-following pipeline
+// (heightmap, center snap, corridor solve, tUpper, sRangeMin)
+function buildTileData(seed, geoU, geoV, cornerStoneConfig) {
+  const HS = 128;
+  const NUM_BUCKETS = 64;
+  const ECW = 72, ECH = 28;
+  const NBRS = [[0,-1],[1,0],[0,1],[-1,0],[1,-1],[1,1],[-1,1],[-1,-1]];
+  const NLEN = [1,1,1,1,Math.SQRT2,Math.SQRT2,Math.SQRT2,Math.SQRT2];
+  const sectorCorner = [1, 2, 3, 0];
+  const cornerStone = cornerStoneConfig || [0, 0, 1, 0];
+  const cornerUVs = [[0, 1], [1, 1], [1, 0], [0, 0]];
+
+  const height = generateStoneHeight(HS, HS, seed);
+  const albedo = generateStoneAlbedo(HS, HS, seed);
+  const blur = boxBlur(height, HS, HS, 8);
+
+  function snapToNearestCrack(geoCU, geoCV) {
+    const searchRadius = 8;
+    const step = 0.5 / searchRadius;
+    const searchExtent = searchRadius * step;
+    let bestScore = 1e10, bestU = geoCU, bestV = geoCV;
+    for (let dr = -searchRadius; dr <= searchRadius; dr++) {
+      for (let dc = -searchRadius; dc <= searchRadius; dc++) {
+        const su = geoCU + dc * step, sv = geoCV + dr * step;
+        const sx2 = ((Math.floor(su * HS) % HS) + HS) % HS;
+        const sy2 = ((Math.floor(sv * HS) % HS) + HS) % HS;
+        const idx2 = sy2 * HS + sx2;
+        const depth2 = blur[idx2] - height[idx2];
+        const inCr = smoothstep(0.01, 0.09, depth2);
+        const isStone = inCr < 0.5 ? 1.0 : 0.0;
+        const dist = Math.hypot(su - geoCU, sv - geoCV) / Math.max(searchExtent, 0.0001);
+        const score = isStone * 1000.0 + dist;
+        if (score < bestScore) { bestScore = score; bestU = su; bestV = sv; }
+      }
+    }
+    return { u: bestU, v: bestV };
+  }
+
+  function getCrackCost(u, v) {
+    const sx = ((Math.floor(u * HS) % HS) + HS) % HS;
+    const sy = ((Math.floor(v * HS) % HS) + HS) % HS;
+    const depth = blur[sy * HS + sx] - height[sy * HS + sx];
+    const inCrack = smoothstep(0.01, 0.09, depth);
+    return inCrack * 1.0 + (1.0 - inCrack) * 16.0;
+  }
+
+  function solveCorridor(cA, cB) {
+    const du = cB.u - cA.u, dv = cB.v - cA.v;
+    const len = Math.sqrt(du * du + dv * dv);
+    if (len < 0.001) return { points: [], sRangeMin: 0 };
+    const tx = du / len, ty = dv / len, nx = -ty, ny = tx;
+    const corridorPadUV = 64 / HS;
+    const halfW = corridorPadUV;
+    const pad = 4 / HS;
+
+    const cost = new Float32Array(ECW * ECH);
+    const dist = new Float32Array(ECW * ECH).fill(1e10);
+    const pred = new Int32Array(ECW * ECH).fill(-1);
+    const cellUV = new Float32Array(ECW * ECH * 2);
+
+    for (let cy = 0; cy < ECH; cy++) for (let cx = 0; cx < ECW; cx++) {
+      const s = cx / (ECW - 1);
+      const t = (cy / (ECH - 1) - 0.5) * 2;
+      const u = cA.u + tx * (s * (len + 2 * pad) - pad) + nx * t * halfW;
+      const v = cA.v + ty * (s * (len + 2 * pad) - pad) + ny * t * halfW;
+      const ci = cy * ECW + cx;
+      cost[ci] = getCrackCost(u, v);
+      cellUV[ci * 2] = u;
+      cellUV[ci * 2 + 1] = v;
+    }
+
+    const srcFx = pad / (len + 2 * pad) * (ECW - 1);
+    const srcX = Math.round(srcFx), srcY = Math.floor(ECH / 2);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const sx = srcX + dx, sy = srcY + dy;
+      if (sx >= 0 && sx < ECW && sy >= 0 && sy < ECH) {
+        const d = Math.sqrt(dx * dx + dy * dy) * cost[sy * ECW + sx];
+        dist[sy * ECW + sx] = d;
+        pred[sy * ECW + sx] = sy * ECW + sx;
+      }
+    }
+
+    const sinkFx = (len + pad) / (len + 2 * pad) * (ECW - 1);
+    const sinkX = Math.round(sinkFx), sinkY = Math.floor(ECH / 2);
+
+    for (let pass = 0; pass < ECW + ECH; pass++) {
+      let changed = false;
+      for (let y = 0; y < ECH; y++) for (let x = 0; x < ECW; x++) {
+        const idx = y * ECW + x;
+        const sc = cost[idx];
+        for (let n = 0; n < 8; n++) {
+          const bx = x + NBRS[n][0], by = y + NBRS[n][1];
+          if (bx < 0 || bx >= ECW || by < 0 || by >= ECH) continue;
+          const nIdx = by * ECW + bx;
+          const ec = NLEN[n] * 0.5 * (sc + cost[nIdx]);
+          const cand = dist[nIdx] + ec;
+          if (cand < dist[idx] - 0.001) {
+            dist[idx] = cand;
+            pred[idx] = nIdx;
+            changed = true;
+          }
+        }
+      }
+      if (!changed) break;
+    }
+
+    let bestIdx = sinkY * ECW + sinkX, bestD = dist[bestIdx];
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+      const sx = sinkX + dx, sy = sinkY + dy;
+      if (sx >= 0 && sx < ECW && sy >= 0 && sy < ECH) {
+        const idx = sy * ECW + sx;
+        if (dist[idx] < bestD) { bestD = dist[idx]; bestIdx = idx; }
+      }
+    }
+    const pathIndices = [];
+    let cur = bestIdx;
+    for (let i = 0; i < ECW * ECH; i++) {
+      pathIndices.push(cur);
+      const p = pred[cur];
+      if (p < 0 || p === cur) break;
+      cur = p;
+    }
+    pathIndices.reverse();
+
+    const invLen = 1 / len;
+    let sMin = 1.0;
+    const points = pathIndices.map(idx => {
+      const pu = cellUV[idx * 2], pv = cellUV[idx * 2 + 1];
+      const sStep = ((pu - cA.u) * tx + (pv - cA.v) * ty) * invLen;
+      sMin = Math.min(sMin, sStep);
+      return { u: pu, v: pv };
+    });
+
+    return { points, sRangeMin: sMin };
+  }
+
+  const center = snapToNearestCrack(geoU, geoV);
+  const neighborGeo = [
+    { u: geoU, v: geoV + 1 },
+    { u: geoU + 1, v: geoV },
+    { u: geoU, v: geoV - 1 },
+    { u: geoU - 1, v: geoV },
+  ];
+  const neighborSnapped = neighborGeo.map(g => snapToNearestCrack(g.u, g.v));
+
+  const corridorResults = neighborSnapped.map(n =>
+    solveCorridor(center, n)
+  );
+  const paths = corridorResults.map(r => r.points);
+
+  const edgeData = [];
+  for (let e = 0; e < 4; e++) {
+    const cA = center, cB = neighborSnapped[e];
+    const du = cB.u - cA.u, dv = cB.v - cA.v;
+    const len = Math.sqrt(du * du + dv * dv);
+    if (len < 0.001 || paths[e].length < 2) { edgeData.push(null); continue; }
+    const tx = du / len, ty = dv / len, nx = -ty, ny = tx;
+    const invLen = 1 / len;
+
+    const tUpper = new Float32Array(NUM_BUCKETS).fill(-1e10);
+    const p = paths[e];
+    for (let i = 0; i < p.length - 1; i++) {
+      let sA = ((p[i].u - cA.u) * tx + (p[i].v - cA.v) * ty) * invLen;
+      let tA = (p[i].u - cA.u) * nx + (p[i].v - cA.v) * ny;
+      let sB = ((p[i+1].u - cA.u) * tx + (p[i+1].v - cA.v) * ty) * invLen;
+      let tB = (p[i+1].u - cA.u) * nx + (p[i+1].v - cA.v) * ny;
+      if (sA > sB) { let tmp = sA; sA = sB; sB = tmp; tmp = tA; tA = tB; tB = tmp; }
+      const bLo = Math.max(0, Math.min(NUM_BUCKETS - 1, Math.floor(sA * (NUM_BUCKETS - 1))));
+      const bHi = Math.max(0, Math.min(NUM_BUCKETS - 1, Math.ceil(sB * (NUM_BUCKETS - 1))));
+      const ds = Math.max(sB - sA, 1e-8);
+      for (let b = bLo; b <= bHi; b++) {
+        const sAt = b / (NUM_BUCKETS - 1);
+        const frac = Math.max(0, Math.min(1, (sAt - sA) / ds));
+        const tAt = tA + (tB - tA) * frac;
+        if (tAt > tUpper[b]) tUpper[b] = tAt;
+      }
+    }
+    for (let b = 0; b < NUM_BUCKETS; b++) {
+      if (tUpper[b] > -1e9) continue;
+      let left = b - 1; while (left >= 0 && tUpper[left] <= -1e9) left--;
+      let right = b + 1; while (right < NUM_BUCKETS && tUpper[right] <= -1e9) right++;
+      if (left < 0 && right >= NUM_BUCKETS) tUpper[b] = 0;
+      else if (left < 0) tUpper[b] = tUpper[right];
+      else if (right >= NUM_BUCKETS) tUpper[b] = tUpper[left];
+      else tUpper[b] = tUpper[left] + (tUpper[right] - tUpper[left]) * (b - left) / (right - left);
+    }
+    tUpper[0] = 0;
+    tUpper[NUM_BUCKETS - 1] = 0;
+
+    const cu = cornerUVs[sectorCorner[e]];
+    const cs = ((cu[0] - cA.u) * tx + (cu[1] - cA.v) * ty) * invLen;
+    const ct = (cu[0] - cA.u) * nx + (cu[1] - cA.v) * ny;
+    const csc = Math.max(0, Math.min(1, cs));
+    const bf = csc * (NUM_BUCKETS - 1);
+    const b0 = Math.floor(bf), b1 = Math.min(b0 + 1, NUM_BUCKETS - 1);
+    const pathT = tUpper[b0] + (tUpper[b1] - tUpper[b0]) * (bf - b0);
+    const sref = (ct - pathT) >= 0 ? 1 : -1;
+
+    edgeData.push({ tx, ty, nx, ny, invLen, tUpper, sref, cA, sRangeMin: corridorResults[e].sRangeMin });
+  }
+
+  return {
+    height, albedo, blur, HS, NUM_BUCKETS,
+    center, neighborSnapped, paths, edgeData,
+    sectorCorner, cornerStone, cornerUVs
+  };
+}
+
+// Classify a single pixel using the sequential overwrite algorithm
+function classifyPixel(u, v, td, opts) {
+  const upToEdge = opts && opts.upToEdge !== undefined ? opts.upToEdge + 1 : 4;
+  const useDomainGuard = !opts || opts.domainGuard !== false;
+  const useWrapGuard = !opts || opts.wrapGuard !== false;
+  const useSRangeMin = opts && opts.useSRangeMin;
+
+  const rawSides = [0, 0, 0, 0];
+  const sLocal = [0, 0, 0, 0];
+  const sRangeMins = [0, 0, 0, 0];
+  for (let e = 0; e < 4; e++) {
+    const ed = td.edgeData[e];
+    if (!ed) { rawSides[e] = 0; sLocal[e] = -999; continue; }
+    const du2 = u - ed.cA.u, dv2 = v - ed.cA.v;
+    const s = (du2 * ed.tx + dv2 * ed.ty) * ed.invLen;
+    const t = du2 * ed.nx + dv2 * ed.ny;
+    const sc = Math.max(0, Math.min(1, s));
+    const bf = sc * (td.NUM_BUCKETS - 1);
+    const b0 = Math.floor(bf), b1 = Math.min(b0 + 1, td.NUM_BUCKETS - 1);
+    const pathT = ed.tUpper[b0] + (ed.tUpper[b1] - ed.tUpper[b0]) * (bf - b0);
+    rawSides[e] = (t - pathT) * ed.sref;
+    sLocal[e] = s;
+    sRangeMins[e] = useSRangeMin ? ed.sRangeMin : 0;
+  }
+  let assigned = 0;
+  for (let i = 1; i < upToEdge; i++) {
+    if (rawSides[i] <= 0) continue;
+    if (useDomainGuard) {
+      const newInRange = sLocal[i] > sRangeMins[i];
+      const curInRange = sLocal[assigned] > sRangeMins[assigned] && rawSides[assigned] > 0;
+      if (!newInRange && curInRange) continue;
+    }
+    if (useWrapGuard) {
+      if (i === 3 && assigned === 0 && rawSides[0] > 0) continue;
+    }
+    assigned = i;
+  }
+  return { assigned, corner: td.sectorCorner[assigned], rawSides, sLocal, sRangeMins };
+}
+
 function drawHeatmap(ctx, data, w, h, cw, ch, colorFn) {
   const img = ctx.createImageData(cw, ch);
   for (let py = 0; py < ch; py++) for (let px = 0; px < cw; px++) {
@@ -890,237 +1149,16 @@ slideInits[1] = function initMotivation() {
     const cv = document.getElementById('cv-crackfollow');
     const ctx = cv.getContext('2d');
 
-    // Crack snapping with wrapped texture sampling
-    function snapToNearestCrack(geoCU, geoCV) {
-      const searchRadius = 8;
-      const step = 0.5 / searchRadius;
-      const searchExtent = searchRadius * step;
-      let bestScore = 1e10, bestU = geoCU, bestV = geoCV;
-      for (let dr = -searchRadius; dr <= searchRadius; dr++) {
-        for (let dc = -searchRadius; dc <= searchRadius; dc++) {
-          const su = geoCU + dc * step, sv = geoCV + dr * step;
-          const sx2 = ((Math.floor(su * HS) % HS) + HS) % HS;
-          const sy2 = ((Math.floor(sv * HS) % HS) + HS) % HS;
-          const idx2 = sy2 * HS + sx2;
-          const depth2 = blur[idx2] - height[idx2];
-          const inCr = smoothstep(0.01, 0.09, depth2);
-          const isStone = inCr < 0.5 ? 1.0 : 0.0;
-          const dist = Math.hypot(su - geoCU, sv - geoCV) / Math.max(searchExtent, 0.0001);
-          const score = isStone * 1000.0 + dist;
-          if (score < bestScore) { bestScore = score; bestU = su; bestV = sv; }
-        }
-      }
-      return { u: bestU, v: bestV };
-    }
+    const td = buildTileData(42, 0.4, 0.6, [0, 0, 1, 0]);
 
-    // Snap this tile's center (shifted SW for demo)
-    const geoU = 0.4, geoV = 0.6;
-    const center = snapToNearestCrack(geoU, geoV);
-    const snapX = center.u * S, snapY = center.v * S;
-    const gcx = geoU * S, gcy = geoV * S;
-
-    // Snap 4 neighbor centers (S, E, N, W) — placed 1 tile-width away
-    const neighborGeo = [
-      { u: geoU, v: geoV + 1 },   // S
-      { u: geoU + 1, v: geoV },   // E
-      { u: geoU, v: geoV - 1 },   // N
-      { u: geoU - 1, v: geoV },   // W
-    ];
-    const neighborSnapped = neighborGeo.map(g => snapToNearestCrack(g.u, g.v));
-    const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e'];
-    const edgeLabels = ['S', 'E', 'N', 'W'];
-
-    // Corridor wavefront solver (matches GPU wavefront relaxation)
-    const ECW = 72, ECH = 28;
-    const NBRS = [[0,-1],[1,0],[0,1],[-1,0],[1,-1],[1,1],[-1,1],[-1,-1]];
-    const NLEN = [1,1,1,1,Math.SQRT2,Math.SQRT2,Math.SQRT2,Math.SQRT2];
-
-    function getCrackCost(u, v) {
-      const sx = ((Math.floor(u * HS) % HS) + HS) % HS;
-      const sy = ((Math.floor(v * HS) % HS) + HS) % HS;
-      const depth = blur[sy * HS + sx] - height[sy * HS + sx];
-      const inCrack = smoothstep(0.01, 0.09, depth);
-      return inCrack * 1.0 + (1.0 - inCrack) * 16.0;
-    }
-
-    function solveCorridor(cA, cB) {
-      const du = cB.u - cA.u, dv = cB.v - cA.v;
-      const len = Math.sqrt(du * du + dv * dv);
-      if (len < 0.001) return [];
-      const tx = du / len, ty = dv / len, nx = -ty, ny = tx;
-      const corridorPadUV = 64 / HS;
-      const halfW = corridorPadUV;
-      const pad = 4 / HS;
-
-      const cost = new Float32Array(ECW * ECH);
-      const dist = new Float32Array(ECW * ECH).fill(1e10);
-      const pred = new Int32Array(ECW * ECH).fill(-1);
-      const cellUV = new Float32Array(ECW * ECH * 2);
-
-      for (let cy = 0; cy < ECH; cy++) for (let cx = 0; cx < ECW; cx++) {
-        const s = cx / (ECW - 1);
-        const t = (cy / (ECH - 1) - 0.5) * 2;
-        const u = cA.u + tx * (s * (len + 2 * pad) - pad) + nx * t * halfW;
-        const v = cA.v + ty * (s * (len + 2 * pad) - pad) + ny * t * halfW;
-        const ci = cy * ECW + cx;
-        cost[ci] = getCrackCost(u, v);
-        cellUV[ci * 2] = u;
-        cellUV[ci * 2 + 1] = v;
-      }
-
-      const srcFx = pad / (len + 2 * pad) * (ECW - 1);
-      const srcX = Math.round(srcFx), srcY = Math.floor(ECH / 2);
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const sx = srcX + dx, sy = srcY + dy;
-        if (sx >= 0 && sx < ECW && sy >= 0 && sy < ECH) {
-          const d = Math.sqrt(dx * dx + dy * dy) * cost[sy * ECW + sx];
-          dist[sy * ECW + sx] = d;
-          pred[sy * ECW + sx] = sy * ECW + sx;
-        }
-      }
-
-      const sinkFx = (len + pad) / (len + 2 * pad) * (ECW - 1);
-      const sinkX = Math.round(sinkFx), sinkY = Math.floor(ECH / 2);
-
-      for (let pass = 0; pass < ECW + ECH; pass++) {
-        let changed = false;
-        for (let y = 0; y < ECH; y++) for (let x = 0; x < ECW; x++) {
-          const idx = y * ECW + x;
-          const sc = cost[idx];
-          for (let n = 0; n < 8; n++) {
-            const bx = x + NBRS[n][0], by = y + NBRS[n][1];
-            if (bx < 0 || bx >= ECW || by < 0 || by >= ECH) continue;
-            const nIdx = by * ECW + bx;
-            const ec = NLEN[n] * 0.5 * (sc + cost[nIdx]);
-            const cand = dist[nIdx] + ec;
-            if (cand < dist[idx] - 0.001) {
-              dist[idx] = cand;
-              pred[idx] = nIdx;
-              changed = true;
-            }
-          }
-        }
-        if (!changed) break;
-      }
-
-      let bestIdx = sinkY * ECW + sinkX, bestD = dist[bestIdx];
-      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
-        const sx = sinkX + dx, sy = sinkY + dy;
-        if (sx >= 0 && sx < ECW && sy >= 0 && sy < ECH) {
-          const idx = sy * ECW + sx;
-          if (dist[idx] < bestD) { bestD = dist[idx]; bestIdx = idx; }
-        }
-      }
-      const path = [];
-      let cur = bestIdx;
-      for (let i = 0; i < ECW * ECH; i++) {
-        path.push({ px: cellUV[cur * 2] * S, py: cellUV[cur * 2 + 1] * S });
-        const p = pred[cur];
-        if (p < 0 || p === cur) break;
-        cur = p;
-      }
-      path.reverse();
-      return path;
-    }
-
-    const paths = neighborSnapped.map(n =>
-      solveCorridor({ u: center.u, v: center.v }, { u: n.u, v: n.v })
-    );
-
-    // Build t_upper offset tables from paths (matches GPU traceback)
-    const NUM_BUCKETS = 64;
-    const sectorCorner = [1, 2, 3, 0];
-    const cornerStone = [0, 0, 1, 0]; // BL=grass, BR=grass, TR=stone, TL=grass
-    const cornerUVs = [[0, 1], [1, 1], [1, 0], [0, 0]]; // BL, BR, TR, TL in v-down UV
-
-    const edgeData = [];
-    for (let e = 0; e < 4; e++) {
-      const cA = center, cB = neighborSnapped[e];
-      const du = cB.u - cA.u, dv = cB.v - cA.v;
-      const len = Math.sqrt(du * du + dv * dv);
-      if (len < 0.001 || !paths[e] || paths[e].length < 2) { edgeData.push(null); continue; }
-      const tx = du / len, ty = dv / len, nx = -ty, ny = tx;
-      const invLen = 1 / len;
-
-      const tUpper = new Float32Array(NUM_BUCKETS).fill(-1e10);
-      const p = paths[e];
-      for (let i = 0; i < p.length - 1; i++) {
-        const aU = p[i].px / S, aV = p[i].py / S;
-        const bU = p[i + 1].px / S, bV = p[i + 1].py / S;
-        let sA = ((aU - cA.u) * tx + (aV - cA.v) * ty) * invLen;
-        let tA = (aU - cA.u) * nx + (aV - cA.v) * ny;
-        let sB = ((bU - cA.u) * tx + (bV - cA.v) * ty) * invLen;
-        let tB = (bU - cA.u) * nx + (bV - cA.v) * ny;
-        if (sA > sB) { let tmp = sA; sA = sB; sB = tmp; tmp = tA; tA = tB; tB = tmp; }
-        const bLo = Math.max(0, Math.min(NUM_BUCKETS - 1, Math.floor(sA * (NUM_BUCKETS - 1))));
-        const bHi = Math.max(0, Math.min(NUM_BUCKETS - 1, Math.ceil(sB * (NUM_BUCKETS - 1))));
-        const ds = Math.max(sB - sA, 1e-8);
-        for (let b = bLo; b <= bHi; b++) {
-          const sAt = b / (NUM_BUCKETS - 1);
-          const frac = Math.max(0, Math.min(1, (sAt - sA) / ds));
-          const tAt = tA + (tB - tA) * frac;
-          if (tAt > tUpper[b]) tUpper[b] = tAt;
-        }
-      }
-      for (let b = 0; b < NUM_BUCKETS; b++) {
-        if (tUpper[b] > -1e9) continue;
-        let left = b - 1; while (left >= 0 && tUpper[left] <= -1e9) left--;
-        let right = b + 1; while (right < NUM_BUCKETS && tUpper[right] <= -1e9) right++;
-        if (left < 0 && right >= NUM_BUCKETS) tUpper[b] = 0;
-        else if (left < 0) tUpper[b] = tUpper[right];
-        else if (right >= NUM_BUCKETS) tUpper[b] = tUpper[left];
-        else tUpper[b] = tUpper[left] + (tUpper[right] - tUpper[left]) * (b - left) / (right - left);
-      }
-      tUpper[0] = 0;
-      tUpper[NUM_BUCKETS - 1] = 0;
-
-      const cu = cornerUVs[sectorCorner[e]];
-      const cs = ((cu[0] - cA.u) * tx + (cu[1] - cA.v) * ty) * invLen;
-      const ct = (cu[0] - cA.u) * nx + (cu[1] - cA.v) * ny;
-      const csc = Math.max(0, Math.min(1, cs));
-      const bf = csc * (NUM_BUCKETS - 1);
-      const b0 = Math.floor(bf), b1 = Math.min(b0 + 1, NUM_BUCKETS - 1);
-      const pathT = tUpper[b0] + (tUpper[b1] - tUpper[b0]) * (bf - b0);
-      const sref = (ct - pathT) >= 0 ? 1 : -1;
-
-      edgeData.push({ tx, ty, nx, ny, invLen, tUpper, sref, cA });
-    }
-
-    // Per-pixel flap folding classification
     const mask = new Float32Array(S * S);
     for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
-      const u = px / S, v = py / S;
-      const rawSides = [0, 0, 0, 0];
-      const sLocal = [0, 0, 0, 0];
-      for (let e = 0; e < 4; e++) {
-        const ed = edgeData[e];
-        if (!ed) { rawSides[e] = 0; sLocal[e] = -999; continue; }
-        const du2 = u - ed.cA.u, dv2 = v - ed.cA.v;
-        const s = (du2 * ed.tx + dv2 * ed.ty) * ed.invLen;
-        const t = du2 * ed.nx + dv2 * ed.ny;
-        const sc = Math.max(0, Math.min(1, s));
-        const bf = sc * (NUM_BUCKETS - 1);
-        const b0 = Math.floor(bf), b1 = Math.min(b0 + 1, NUM_BUCKETS - 1);
-        const pathT = ed.tUpper[b0] + (ed.tUpper[b1] - ed.tUpper[b0]) * (bf - b0);
-        rawSides[e] = (t - pathT) * ed.sref;
-        sLocal[e] = s;
-      }
-      let assigned = 0;
-      for (let i = 1; i < 4; i++) {
-        if (rawSides[i] <= 0) continue;
-        const newInRange = sLocal[i] > 0;
-        const curInRange = sLocal[assigned] > 0 && rawSides[assigned] > 0;
-        if (!newInRange && curInRange) continue;
-        if (i === 3 && assigned === 0 && rawSides[0] > 0) continue;
-        assigned = i;
-      }
-      mask[py * S + px] = cornerStone[sectorCorner[assigned]];
+      const r = classifyPixel(px / S, py / S, td, { useSRangeMin: true });
+      mask[py * S + px] = td.cornerStone[r.corner];
     }
 
-    // Blur mask for smooth transition (matches GPU separable Gaussian)
     const blurredMask = gaussBlur(mask, S, S, 8);
 
-    // Render stone/grass blend
     const img = ctx.createImageData(S, S);
     for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
       const u = px / S, v = py / S;
@@ -2145,9 +2183,9 @@ slideInits[8] = function initSharedEdges() {
   const ctx = cv.getContext('2d');
   const W = cv.width, H = cv.height;
 
-  const tileW = 160, tileH = 160, gap = 80;
-  const tileAx = (W - tileW * 2 - gap) / 2, tileAy = (H - tileH) / 2;
-  const tileBx = tileAx + tileW + gap, tileBy = tileAy;
+  const tileW = 160, tileH = 160;
+  const tileAx = (W - tileW * 2) / 2, tileAy = (H - tileH) / 2;
+  const tileBx = tileAx + tileW, tileBy = tileAy;
 
   const centerA = { x: tileAx + tileW / 2, y: tileAy + tileH / 2 };
   const centerB = { x: tileBx + tileW / 2, y: tileBy + tileH / 2 };
@@ -2198,6 +2236,39 @@ slideInits[8] = function initSharedEdges() {
       ctx.fillStyle = '#fff'; ctx.fill();
     }
 
+    // s-axis (dotted line between centers)
+    const sStart = viewFromA ? centerA : centerB;
+    const sEnd = viewFromA ? centerB : centerA;
+    ctx.beginPath(); ctx.moveTo(sStart.x, sStart.y); ctx.lineTo(sEnd.x, sEnd.y);
+    ctx.strokeStyle = '#58a6ff80'; ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
+    ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#58a6ff';
+    const sMidX = (sStart.x + sEnd.x) / 2, sMidY = (sStart.y + sEnd.y) / 2;
+    ctx.fillText('s', sMidX, sMidY + 20);
+
+    // t-axis (perpendicular at s=0)
+    const sdx = sEnd.x - sStart.x, sdy = sEnd.y - sStart.y;
+    const sLen = Math.sqrt(sdx * sdx + sdy * sdy);
+    const tnx = -sdy / sLen, tny = sdx / sLen;
+    const tSign = viewFromA ? 1 : -1;
+    const tAxisLen = 40;
+    ctx.beginPath();
+    ctx.moveTo(sStart.x, sStart.y);
+    ctx.lineTo(sStart.x + tnx * tSign * tAxisLen, sStart.y + tny * tSign * tAxisLen);
+    ctx.strokeStyle = '#bc8cff80'; ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
+    const tTipX = sStart.x + tnx * tSign * tAxisLen, tTipY = sStart.y + tny * tSign * tAxisLen;
+    const aSize = 6;
+    ctx.beginPath();
+    ctx.moveTo(tTipX, tTipY);
+    ctx.lineTo(tTipX - tnx * tSign * aSize + tny * tSign * aSize * 0.5, tTipY - tny * tSign * aSize - tnx * tSign * aSize * 0.5);
+    ctx.lineTo(tTipX - tnx * tSign * aSize - tny * tSign * aSize * 0.5, tTipY - tny * tSign * aSize + tnx * tSign * aSize * 0.5);
+    ctx.closePath(); ctx.fillStyle = '#bc8cff'; ctx.fill();
+    ctx.font = 'bold 12px monospace'; ctx.textAlign = 'left';
+    ctx.fillStyle = '#bc8cff';
+    ctx.fillText('+t', tTipX + 6, tTipY + 4);
+
     // Edge path
     ctx.beginPath();
     for (let i = 0; i < path.length; i++) {
@@ -2220,44 +2291,12 @@ slideInits[8] = function initSharedEdges() {
         ctx.fill();
         ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
         ctx.fillStyle = '#e6edf3';
-        ctx.fillText(`s=${dispT.toFixed(1)}`, px, py - 12);
+        ctx.fillText(`s=${dispT.toFixed(1)}`, px, py - 18);
       } else {
         ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2);
         ctx.fillStyle = '#d2992280'; ctx.fill();
       }
     }
-
-    // Normal arrow at midpoint
-    const mid = path[Math.floor(path.length / 2)];
-    const mPrev = path[Math.floor(path.length / 2) - 2];
-    const mNext = path[Math.floor(path.length / 2) + 2];
-    const tang = { x: mNext.x - mPrev.x, y: mNext.y - mPrev.y };
-    const tLen = Math.sqrt(tang.x ** 2 + tang.y ** 2);
-    const norm = viewFromA ? { x: -tang.y / tLen, y: tang.x / tLen } : { x: tang.y / tLen, y: -tang.x / tLen };
-
-    ctx.beginPath();
-    ctx.moveTo(mid.x, mid.y);
-    ctx.lineTo(mid.x + norm.x * 30, mid.y + norm.y * 30);
-    ctx.strokeStyle = '#bc8cff'; ctx.lineWidth = 2; ctx.stroke();
-    const arrowSize = 8;
-    const ax2 = mid.x + norm.x * 30, ay2 = mid.y + norm.y * 30;
-    ctx.beginPath();
-    ctx.moveTo(ax2, ay2);
-    ctx.lineTo(ax2 - norm.x * arrowSize + norm.y * arrowSize * 0.5, ay2 - norm.y * arrowSize - norm.x * arrowSize * 0.5);
-    ctx.lineTo(ax2 - norm.x * arrowSize - norm.y * arrowSize * 0.5, ay2 - norm.y * arrowSize + norm.x * arrowSize * 0.5);
-    ctx.closePath(); ctx.fillStyle = '#bc8cff'; ctx.fill();
-
-    ctx.font = '11px monospace'; ctx.textAlign = 'left';
-    ctx.fillStyle = '#bc8cff';
-    ctx.fillText('n (positive side)', ax2 + 6, ay2 + 4);
-
-    // Side labels
-    const sideY = mid.y + norm.y * 55;
-    ctx.font = 'bold 13px monospace'; ctx.textAlign = 'center';
-    ctx.fillStyle = '#3fb95080';
-    ctx.fillText('positive side', mid.x + norm.x * 55, sideY);
-    ctx.fillStyle = '#f8514980';
-    ctx.fillText('negative side', mid.x - norm.x * 55, mid.y - norm.y * 55);
 
     // sref annotation
     ctx.font = '12px monospace'; ctx.textAlign = 'center';
@@ -2269,8 +2308,16 @@ slideInits[8] = function initSharedEdges() {
 
   draw();
 
-  document.getElementById('btn-view-a').onclick = () => { viewFromA = true; draw(); };
-  document.getElementById('btn-view-b').onclick = () => { viewFromA = false; draw(); };
+  document.getElementById('btn-view-a').onclick = () => {
+    viewFromA = true; draw();
+    document.getElementById('btn-view-a').classList.add('active');
+    document.getElementById('btn-view-b').classList.remove('active');
+  };
+  document.getElementById('btn-view-b').onclick = () => {
+    viewFromA = false; draw();
+    document.getElementById('btn-view-b').classList.add('active');
+    document.getElementById('btn-view-a').classList.remove('active');
+  };
   document.getElementById('btn-edge-regen').onclick = () => { pathSeed = Math.floor(Math.random() * 10000); draw(); };
 };
 
@@ -2282,154 +2329,89 @@ slideInits[9] = function initSequentialOverwrite() {
   const cv = document.getElementById('cv-flaps');
   const ctx = cv.getContext('2d');
   const S = cv.width;
-  const cornerColors = [
-    [255, 150, 50],  // BL = orange (W edge)
-    [255, 220, 50],  // BR = yellow (S edge)
-    [50, 220, 200],  // TR = cyan (E edge)
-    [200, 120, 255]  // TL = purple (N edge)
+  const slotColors = [
+    [255, 255, 0],    // S = yellow → BR
+    [0, 255, 255],    // E = cyan → TR
+    [255, 0, 255],    // N = magenta → TL
+    [255, 128, 0]     // W = orange → BL
   ];
-  const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e']; // S, E, N, W
+  const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e'];
   const edgeNames = ['S (→BR)', 'E (→TR)', 'N (→TL)', 'W (→BL)'];
-  const sectorCorner = [1, 2, 3, 0];
 
-  let paths = [];
+  let td = buildTileData(42, 0.4, 0.6, [0, 0, 1, 0]);
   let showPaths = true;
+  let tShade = false;
   let currentStep = -1;
 
-  function genPaths() {
-    paths = [];
-    const seed = Math.floor(Math.random() * 10000);
-    for (let e = 0; e < 4; e++) {
-      const pts = [];
-      const N = 32;
-      for (let i = 0; i <= N; i++) {
-        const t = i / N;
-        let base, perp;
-        if (e === 0) { base = { x: t, y: 0 }; perp = { x: 0, y: 1 }; }
-        else if (e === 1) { base = { x: 1, y: t }; perp = { x: -1, y: 0 }; }
-        else if (e === 2) { base = { x: 1 - t, y: 1 }; perp = { x: 0, y: -1 }; }
-        else { base = { x: 0, y: 1 - t }; perp = { x: 1, y: 0 }; }
-        const wobble = Math.sin(t * Math.PI * 2 + hashXY(e, 0, seed) * 10) * 0.12
-                      + Math.sin(t * Math.PI * 3.7 + hashXY(e, 1, seed) * 10) * 0.06;
-        pts.push({ x: base.x + perp.x * (0.5 + wobble), y: base.y + perp.y * (0.5 + wobble) });
-      }
-      paths.push(pts);
-    }
-  }
-
-  function sideOfPath(pathIdx, px, py) {
-    const pts = paths[pathIdx];
-    let bestDist = Infinity, bestSide = 0;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const ax = pts[i].x, ay = pts[i].y, bx = pts[i + 1].x, by = pts[i + 1].y;
-      const dx = bx - ax, dy = by - ay;
-      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
-      const cx = ax + t * dx, cy = ay + t * dy;
-      const dist = Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
-      const side = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-      if (dist < bestDist) { bestDist = dist; bestSide = side; }
-    }
-    return bestSide;
-  }
-
-  function sParamOfPath(pathIdx, px, py) {
-    const pts = paths[pathIdx];
-    let bestDist = Infinity, bestT = 0;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const ax = pts[i].x, ay = pts[i].y, bx = pts[i + 1].x, by = pts[i + 1].y;
-      const dx = bx - ax, dy = by - ay;
-      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
-      const cx = ax + t * dx, cy = ay + t * dy;
-      const dist = Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
-      if (dist < bestDist) { bestDist = dist; bestT = (i + t) / (pts.length - 1); }
-    }
-    return bestT;
-  }
-
-  function classify(px, py, upToEdge) {
-    const limit = upToEdge !== undefined ? upToEdge + 1 : 4;
-    let assigned = 0;
-    const sides = [], sLocal = [];
-    for (let i = 0; i < 4; i++) {
-      sides.push(sideOfPath(i, px, py));
-      sLocal.push(sParamOfPath(i, px, py));
-    }
-    for (let i = 1; i < limit; i++) {
-      if (sides[i] <= 0) continue;
-      const newInRange = sLocal[i] > 0.0;
-      const curInRange = sLocal[assigned] > 0.0 && sides[assigned] > 0;
-      if (!newInRange && curInRange) continue;
-      if (i === 3 && assigned === 0 && sides[0] > 0) continue;
-      assigned = i;
-    }
-    return sectorCorner[assigned];
-  }
-
   function draw(upToEdge) {
-    const margin = 30;
-    const tileS = S - margin * 2;
-
     ctx.clearRect(0, 0, S, S);
-    ctx.fillStyle = '#0a1628'; ctx.fillRect(0, 0, S, S);
-
     const img = ctx.createImageData(S, S);
     for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
-      const u = (px - margin) / tileS, v = (py - margin) / tileS;
-      const i = (py * S + px) * 4;
-      if (u < 0 || u > 1 || v < 0 || v > 1) {
-        img.data[i] = 13; img.data[i+1] = 17; img.data[i+2] = 23; img.data[i+3] = 255;
-        continue;
+      const u = px / S, v = py / S;
+      const r = classifyPixel(u, v, td, { upToEdge, useSRangeMin: true });
+      const [cr, cg, cb] = slotColors[r.assigned];
+      let shade = 0.6;
+      if (tShade) {
+        const t4 = r.rawSides[r.assigned];
+        const sl = r.sLocal[r.assigned];
+        if (sl <= r.sRangeMins[r.assigned] || t4 <= 0) shade = 0.15;
+        else shade = Math.max(0.3, Math.min(1.0, t4 * 5.0 + 0.3));
       }
-      const corner = classify(u, v, upToEdge);
-      const [r, g, b] = cornerColors[corner];
-      img.data[i] = r; img.data[i+1] = g; img.data[i+2] = b; img.data[i+3] = 255;
+      const sx = Math.floor(u * td.HS), sy = Math.floor(v * td.HS);
+      const idx = sy * td.HS + sx;
+      const ai = idx * 3;
+      const stR = texturesReady ? td.albedo[ai] : (td.height[idx] * 160 + 40);
+      const stG = texturesReady ? td.albedo[ai+1] : (td.height[idx] * 140 + 35);
+      const stB = texturesReady ? td.albedo[ai+2] : (td.height[idx] * 130 + 30);
+      const blend = 0.5;
+      const i = (py * S + px) * 4;
+      img.data[i]   = stR * (1 - blend) + cr * shade * blend;
+      img.data[i+1] = stG * (1 - blend) + cg * shade * blend;
+      img.data[i+2] = stB * (1 - blend) + cb * shade * blend;
+      img.data[i+3] = 255;
     }
     ctx.putImageData(img, 0, 0);
-
-    ctx.strokeStyle = '#ffffff40'; ctx.lineWidth = 1;
-    ctx.strokeRect(margin, margin, tileS, tileS);
-
-    if (showPaths) {
-      const limit = upToEdge !== undefined ? upToEdge + 1 : 4;
-      for (let e = 0; e < Math.min(paths.length, limit); e++) {
-        ctx.beginPath();
-        for (let i = 0; i < paths[e].length; i++) {
-          const px = margin + paths[e][i].x * tileS, py = margin + paths[e][i].y * tileS;
-          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-        }
-        ctx.strokeStyle = edgeColors[e]; ctx.lineWidth = 3; ctx.stroke();
-      }
-    }
-
-    const cornerPos = [[margin + 15, S - margin - 10], [S - margin - 15, S - margin - 10],
-                        [S - margin - 15, margin + 18], [margin + 15, margin + 18]];
-    const cornerLabels = ['BL', 'BR', 'TR', 'TL'];
-    for (let i = 0; i < 4; i++) {
-      ctx.fillStyle = `rgb(${cornerColors[i]})`; ctx.font = 'bold 14px monospace';
-      ctx.textAlign = 'center'; ctx.fillText(cornerLabels[i], cornerPos[i][0], cornerPos[i][1]);
-    }
 
     if (showPaths) {
       const limit = upToEdge !== undefined ? upToEdge + 1 : 4;
       for (let e = 0; e < limit; e++) {
-        ctx.fillStyle = edgeColors[e]; ctx.font = '12px monospace'; ctx.textAlign = 'center';
-        const pos = [
-          [S/2, S - margin + 15], [S - margin + 20, S/2], [S/2, margin - 8], [margin - 10, S/2]
-        ];
-        ctx.fillText(edgeNames[e], pos[e][0], pos[e][1]);
+        const p = td.paths[e];
+        if (!p || p.length < 2) continue;
+        ctx.beginPath();
+        for (let i = 0; i < p.length; i++) {
+          const px2 = p[i].u * S, py2 = p[i].v * S;
+          if (i === 0) ctx.moveTo(px2, py2); else ctx.lineTo(px2, py2);
+        }
+        ctx.strokeStyle = edgeColors[e]; ctx.lineWidth = 2.5; ctx.globalAlpha = 0.8;
+        ctx.stroke(); ctx.globalAlpha = 1;
       }
+      // Center dot
+      ctx.beginPath(); ctx.arc(td.center.u * S, td.center.v * S, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff'; ctx.fill();
     }
 
-    // Step indicator
+    ctx.strokeStyle = '#ffffff40'; ctx.lineWidth = 1;
+    ctx.strokeRect(0, 0, S, S);
+
     if (upToEdge !== undefined) {
       ctx.font = 'bold 14px monospace'; ctx.textAlign = 'left';
       ctx.fillStyle = edgeColors[upToEdge];
-      ctx.fillText(`Processing: ${edgeNames[upToEdge]}`, margin, S - 5);
+      ctx.fillText(`Processing: ${edgeNames[upToEdge]}`, 8, S - 8);
     }
   }
 
-  genPaths();
   draw();
+
+  cv.onmousemove = (e) => {
+    const rect = cv.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) / rect.width, my = (e.clientY - rect.top) / rect.height;
+    if (mx < 0 || mx > 1 || my < 0 || my > 1) return;
+    const r = classifyPixel(mx, my, td, { upToEdge: currentStep >= 0 ? currentStep : undefined, useSRangeMin: true });
+    const info = document.getElementById('flap-hover-info');
+    const names = ['S','E','N','W'];
+    info.textContent = `assigned=${names[r.assigned]}  raw=[${r.rawSides.map(v=>v.toFixed(3)).join(', ')}]  s=[${r.sLocal.map(v=>v.toFixed(2)).join(', ')}]`;
+  };
+  cv.onmouseleave = () => { document.getElementById('flap-hover-info').textContent = ''; };
 
   let animating = false;
   document.getElementById('btn-flap-animate').onclick = () => {
@@ -2439,12 +2421,8 @@ slideInits[9] = function initSequentialOverwrite() {
     function step() {
       draw(currentStep);
       document.getElementById('flap-step-label').textContent = `Edge ${currentStep + 1}/4: ${edgeNames[currentStep]}`;
-      if (currentStep < 3) {
-        currentStep++;
-        setTimeout(step, 800);
-      } else {
-        animating = false;
-      }
+      if (currentStep < 3) { currentStep++; setTimeout(step, 800); }
+      else { animating = false; }
     }
     step();
   };
@@ -2454,8 +2432,14 @@ slideInits[9] = function initSequentialOverwrite() {
     draw(currentStep);
     document.getElementById('flap-step-label').textContent = `Edge ${currentStep + 1}/4: ${edgeNames[currentStep]}`;
   };
-  document.getElementById('btn-flap-regen').onclick = () => { genPaths(); currentStep = -1; document.getElementById('flap-step-label').textContent = 'All edges'; draw(); };
+  document.getElementById('btn-flap-regen').onclick = () => {
+    td = buildTileData(Math.floor(Math.random() * 10000), 0.4, 0.6, [0, 0, 1, 0]);
+    currentStep = -1;
+    document.getElementById('flap-step-label').textContent = 'All edges';
+    draw();
+  };
   document.getElementById('chk-flap-paths').onchange = (e) => { showPaths = e.target.checked; draw(currentStep >= 0 ? currentStep : undefined); };
+  document.getElementById('chk-flap-tshade').onchange = (e) => { tShade = e.target.checked; draw(currentStep >= 0 ? currentStep : undefined); };
 };
 
 // ============================================================
@@ -2466,145 +2450,101 @@ slideInits[10] = function initDomainGuards() {
   const cv = document.getElementById('cv-guards');
   const ctx = cv.getContext('2d');
   const S = cv.width;
-  const cornerColors = [
-    [255, 150, 50],  // BL
-    [255, 220, 50],  // BR
-    [50, 220, 200],  // TR
-    [200, 120, 255]  // TL
+  const slotColors = [
+    [255, 255, 0],    // S = yellow → BR
+    [0, 255, 255],    // E = cyan → TR
+    [255, 0, 255],    // N = magenta → TL
+    [255, 128, 0]     // W = orange → BL
   ];
   const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e'];
-  const sectorCorner = [1, 2, 3, 0];
+  const edgeNames = ['S','E','N','W'];
 
-  let paths = [];
-  let useDomainGuard = true, useWrapGuard = true;
-
-  function genPaths() {
-    paths = [];
-    const seed = Math.floor(Math.random() * 10000);
-    for (let e = 0; e < 4; e++) {
-      const pts = [];
-      const N = 32;
-      for (let i = 0; i <= N; i++) {
-        const t = i / N;
-        let base, perp;
-        if (e === 0) { base = { x: t, y: 0 }; perp = { x: 0, y: 1 }; }
-        else if (e === 1) { base = { x: 1, y: t }; perp = { x: -1, y: 0 }; }
-        else if (e === 2) { base = { x: 1 - t, y: 1 }; perp = { x: 0, y: -1 }; }
-        else { base = { x: 0, y: 1 - t }; perp = { x: 1, y: 0 }; }
-        const wobble = Math.sin(t * Math.PI * 2 + hashXY(e, 0, seed) * 10) * 0.12
-                      + Math.sin(t * Math.PI * 3.7 + hashXY(e, 1, seed) * 10) * 0.06;
-        pts.push({ x: base.x + perp.x * (0.5 + wobble), y: base.y + perp.y * (0.5 + wobble) });
-      }
-      paths.push(pts);
-    }
-  }
-
-  function sideOfPath(pathIdx, px, py) {
-    const pts = paths[pathIdx];
-    let bestDist = Infinity, bestSide = 0;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const ax = pts[i].x, ay = pts[i].y, bx = pts[i + 1].x, by = pts[i + 1].y;
-      const dx = bx - ax, dy = by - ay;
-      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
-      const cx = ax + t * dx, cy = ay + t * dy;
-      const dist = Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
-      const side = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-      if (dist < bestDist) { bestDist = dist; bestSide = side; }
-    }
-    return bestSide;
-  }
-
-  function sParamOfPath(pathIdx, px, py) {
-    const pts = paths[pathIdx];
-    let bestDist = Infinity, bestT = 0;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const ax = pts[i].x, ay = pts[i].y, bx = pts[i + 1].x, by = pts[i + 1].y;
-      const dx = bx - ax, dy = by - ay;
-      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
-      const cx = ax + t * dx, cy = ay + t * dy;
-      const dist = Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
-      if (dist < bestDist) { bestDist = dist; bestT = (i + t) / (pts.length - 1); }
-    }
-    return bestT;
-  }
-
-  function classify(px, py) {
-    let assigned = 0;
-    const sides = [], sLocal = [];
-    for (let i = 0; i < 4; i++) {
-      sides.push(sideOfPath(i, px, py));
-      sLocal.push(sParamOfPath(i, px, py));
-    }
-    for (let i = 1; i < 4; i++) {
-      if (sides[i] <= 0) continue;
-      if (useDomainGuard) {
-        const newInRange = sLocal[i] > 0.0;
-        const curInRange = sLocal[assigned] > 0.0 && sides[assigned] > 0;
-        if (!newInRange && curInRange) continue;
-      }
-      if (useWrapGuard) {
-        if (i === 3 && assigned === 0 && sides[0] > 0) continue;
-      }
-      assigned = i;
-    }
-    return sectorCorner[assigned];
-  }
+  let td = buildTileData(42, 0.4, 0.6, [0, 0, 1, 0]);
+  let useDomainGuard = true, useWrapGuard = true, useSRangeMin = false, showOOR = false;
 
   function draw() {
-    const margin = 30;
-    const tileS = S - margin * 2;
-
     ctx.clearRect(0, 0, S, S);
-    ctx.fillStyle = '#0a1628'; ctx.fillRect(0, 0, S, S);
-
     const img = ctx.createImageData(S, S);
     for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
-      const u = (px - margin) / tileS, v = (py - margin) / tileS;
-      const i = (py * S + px) * 4;
-      if (u < 0 || u > 1 || v < 0 || v > 1) {
-        img.data[i] = 13; img.data[i+1] = 17; img.data[i+2] = 23; img.data[i+3] = 255;
-        continue;
+      const u = px / S, v = py / S;
+      const r = classifyPixel(u, v, td, {
+        domainGuard: useDomainGuard,
+        wrapGuard: useWrapGuard,
+        useSRangeMin
+      });
+      const [cr, cg, cb] = slotColors[r.assigned];
+      let shade = 0.6;
+
+      if (showOOR) {
+        const ed = td.edgeData[r.assigned];
+        const sMin = ed ? (useSRangeMin ? ed.sRangeMin : 0) : 0;
+        if (r.sLocal[r.assigned] <= sMin) shade = 0.15;
       }
-      const corner = classify(u, v);
-      const [r, g, b] = cornerColors[corner];
-      img.data[i] = r; img.data[i+1] = g; img.data[i+2] = b; img.data[i+3] = 255;
+
+      const sx = Math.floor(u * td.HS), sy = Math.floor(v * td.HS);
+      const idx = sy * td.HS + sx;
+      const ai = idx * 3;
+      const stR = texturesReady ? td.albedo[ai] : (td.height[idx] * 160 + 40);
+      const stG = texturesReady ? td.albedo[ai+1] : (td.height[idx] * 140 + 35);
+      const stB = texturesReady ? td.albedo[ai+2] : (td.height[idx] * 130 + 30);
+      const blend = 0.5;
+      const i = (py * S + px) * 4;
+      img.data[i]   = stR * (1 - blend) + cr * shade * blend;
+      img.data[i+1] = stG * (1 - blend) + cg * shade * blend;
+      img.data[i+2] = stB * (1 - blend) + cb * shade * blend;
+      img.data[i+3] = 255;
     }
     ctx.putImageData(img, 0, 0);
 
-    ctx.strokeStyle = '#ffffff40'; ctx.lineWidth = 1;
-    ctx.strokeRect(margin, margin, tileS, tileS);
-
     for (let e = 0; e < 4; e++) {
+      const p = td.paths[e];
+      if (!p || p.length < 2) continue;
       ctx.beginPath();
-      for (let i = 0; i < paths[e].length; i++) {
-        const px = margin + paths[e][i].x * tileS, py = margin + paths[e][i].y * tileS;
-        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      for (let i = 0; i < p.length; i++) {
+        const px2 = p[i].u * S, py2 = p[i].v * S;
+        if (i === 0) ctx.moveTo(px2, py2); else ctx.lineTo(px2, py2);
       }
-      ctx.strokeStyle = edgeColors[e]; ctx.lineWidth = 3; ctx.stroke();
+      ctx.strokeStyle = edgeColors[e]; ctx.lineWidth = 2.5; ctx.globalAlpha = 0.8;
+      ctx.stroke(); ctx.globalAlpha = 1;
     }
+    ctx.beginPath(); ctx.arc(td.center.u * S, td.center.v * S, 4, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff'; ctx.fill();
 
-    const cornerPos = [[margin + 15, S - margin - 10], [S - margin - 15, S - margin - 10],
-                        [S - margin - 15, margin + 18], [margin + 15, margin + 18]];
-    const cornerLabels = ['BL', 'BR', 'TR', 'TL'];
-    for (let i = 0; i < 4; i++) {
-      ctx.fillStyle = `rgb(${cornerColors[i]})`; ctx.font = 'bold 14px monospace';
-      ctx.textAlign = 'center'; ctx.fillText(cornerLabels[i], cornerPos[i][0], cornerPos[i][1]);
-    }
-
-    // Guard status
-    ctx.font = '13px monospace'; ctx.textAlign = 'left';
-    ctx.fillStyle = useDomainGuard ? '#3fb950' : '#f85149';
-    ctx.fillText(`Domain guard: ${useDomainGuard ? 'ON' : 'OFF'}`, margin, S - 5);
-    ctx.fillStyle = useWrapGuard ? '#3fb950' : '#f85149';
-    ctx.fillText(`Wrap guard: ${useWrapGuard ? 'ON' : 'OFF'}`, margin + 200, S - 5);
+    ctx.strokeStyle = '#ffffff40'; ctx.lineWidth = 1;
+    ctx.strokeRect(0, 0, S, S);
   }
 
-  genPaths();
   draw();
+
+  cv.onmousemove = (e) => {
+    const rect = cv.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) / rect.width, my = (e.clientY - rect.top) / rect.height;
+    if (mx < 0 || mx > 1 || my < 0 || my > 1) return;
+    const r = classifyPixel(mx, my, td, { domainGuard: useDomainGuard, wrapGuard: useWrapGuard, useSRangeMin });
+    const info = document.getElementById('guard-hover-info');
+    const guardInfo = [];
+    for (let i = 1; i < 4; i++) {
+      if (r.rawSides[i] <= 0) continue;
+      const inRange = r.sLocal[i] > r.sRangeMins[i];
+      const curInRange = r.sLocal[r.assigned] > r.sRangeMins[r.assigned] && r.rawSides[r.assigned] > 0;
+      const blocked = [];
+      if (useDomainGuard && !inRange && curInRange) blocked.push('domain');
+      if (useWrapGuard && i === 3 && r.assigned === 0 && r.rawSides[0] > 0) blocked.push('wrap');
+      if (blocked.length) guardInfo.push(`${edgeNames[i]} blocked by ${blocked.join('+')}`);
+    }
+    info.innerHTML = `assigned=${edgeNames[r.assigned]}  raw=[${r.rawSides.map(v=>v.toFixed(3)).join(', ')}]  s=[${r.sLocal.map(v=>v.toFixed(2)).join(', ')}]` +
+      (guardInfo.length ? `<br>${guardInfo.join(' | ')}` : '');
+  };
+  cv.onmouseleave = () => { document.getElementById('guard-hover-info').innerHTML = ''; };
 
   document.getElementById('chk-guard-domain').onchange = (e) => { useDomainGuard = e.target.checked; draw(); };
   document.getElementById('chk-guard-wrap').onchange = (e) => { useWrapGuard = e.target.checked; draw(); };
-  document.getElementById('btn-guard-regen').onclick = () => { genPaths(); draw(); };
+  document.getElementById('chk-guard-srangemin').onchange = (e) => { useSRangeMin = e.target.checked; draw(); };
+  document.getElementById('chk-guard-show-oor').onchange = (e) => { showOOR = e.target.checked; draw(); };
+  document.getElementById('btn-guard-regen').onclick = () => {
+    td = buildTileData(Math.floor(Math.random() * 10000), 0.4, 0.6, [0, 0, 1, 0]);
+    draw();
+  };
 };
 
 // ============================================================
