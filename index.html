@@ -184,7 +184,7 @@ pre .str { color:var(--green); } pre .type { color:var(--cyan); }
     <span class="pipe-arrow">&#10132;</span>
     <div class="pipe-stage" style="background:#2a1a2a;color:var(--purple);">Center Snap<br><span class="small">Find crack seed</span></div>
     <span class="pipe-arrow">&#10132;</span>
-    <div class="pipe-stage" style="background:#1a2a2a;color:var(--cyan);">Pathfinding<br><span class="small">Monotonic DP</span></div>
+    <div class="pipe-stage" style="background:#1a2a2a;color:var(--cyan);">Pathfinding<br><span class="small">Corridor Wavefront</span></div>
     <span class="pipe-arrow">&#10132;</span>
     <div class="pipe-stage" style="background:#2a1a1a;color:var(--orange);">Classify<br><span class="small">Flap folding</span></div>
     <span class="pipe-arrow">&#10132;</span>
@@ -234,14 +234,14 @@ pre .str { color:var(--green); } pre .type { color:var(--cyan); }
       </div>
     </div>
     <div class="content-block" style="max-width:420px;">
-      <p class="mb-1">Within each grass tile, corners can be stone or grass. The 4-bit <code>SurfaceCase</code> bitmask determines how many and which edge paths are needed:</p>
+      <p class="mb-1">Within each grass tile, corners can be stone or grass. The 4-bit <code>SurfaceCase</code> bitmask determines how many <em>transition edges</em> need crack-following paths:</p>
       <ul>
-        <li><strong>0 paths</strong>: all-grass (0000) or all-stone (1111)</li>
-        <li><strong>2 paths</strong>: one corner differs (corner/three cases)</li>
-        <li><strong>4 paths</strong>: edge, saddle, or mixed cases</li>
+        <li><strong>0 solved</strong>: all-grass (0000) or all-stone (1111) &mdash; no transitions</li>
+        <li><strong>2 solved</strong>: one corner differs &mdash; only the two bordering edges are transition edges</li>
+        <li><strong>4 solved</strong>: edge, saddle, or mixed cases</li>
       </ul>
       <div class="key-insight mt-1">
-        <p>Each edge path connects the centers of adjacent tiles. For mixed tiles, these paths will be <em>routed through the crack network</em> in texture space.</p>
+        <p>Classification still references all 4 edge metadata slots, but wavefront solve and traceback only run for transition edges. Non-transition edges use default metadata and are never traced.</p>
       </div>
       <pre class="mt-1">
 <span class="cm">// Per-instance data packed into INSTANCE_CUSTOM</span>
@@ -446,10 +446,11 @@ corner = sector_corner[assigned];
     </div>
     <div class="content-block" style="max-width:420px;">
       <h3>Domain guard</h3>
-      <p class="mb-1">The path only covers part of the s-axis. Beyond <code>s_range_min</code> (the path's minimum s), data is extrapolated. The domain guard prevents an out-of-range edge from overwriting one with a valid claim:</p>
+      <p class="mb-1">The path only covers part of the s-axis. The runtime stores <code>(path_min_s, path_max_s)</code>; for reversed edge references, the effective lower bound is <code>1.0 &minus; path_max_s</code>. The domain guard prevents an out-of-range edge from overwriting one with a valid claim:</p>
       <pre class="mt-1">
-<span class="type">bool</span> new_in_range = s_local[i] &gt; s_range_min[i];
-<span class="type">bool</span> cur_in_range = s_local[assigned] &gt; s_range_min[assigned]
+<span class="type">float</span> s_lo = reversed ? <span class="num">1.0</span> - path_max_s : path_min_s;
+<span class="type">bool</span> new_in_range = s_local[i] &gt; s_lo[i];
+<span class="type">bool</span> cur_in_range = s_local[assigned] &gt; s_lo[assigned]
                  &amp;&amp; raw_sides[assigned] &gt; <span class="num">0.0</span>;
 <span class="kw">if</span> (!new_in_range &amp;&amp; cur_in_range)
   <span class="kw">continue</span>;
@@ -540,21 +541,25 @@ albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
       <h3 class="mt-1">GPU Compute Pipeline</h3>
       <pre>
 <span class="cm">// All dispatched in a single command buffer</span>
-<span class="fn">dispatch</span>(find_centers, tiles, <span class="num">1</span>);   <span class="cm">// 64 threads/tile</span>
+<span class="fn">dispatch</span>(find_centers, tiles, <span class="num">1</span>);      <span class="cm">// snap to cracks</span>
 <span class="fn">barrier</span>();
-<span class="fn">dispatch</span>(wf_init, atlas_wg);          <span class="cm">// seed distance field</span>
+<span class="fn">dispatch</span>(edge_meta_init, edges, <span class="num">1</span>);    <span class="cm">// chord, normal, sref</span>
 <span class="fn">barrier</span>();
-<span class="kw">for</span> (pass in relaxation_passes) {
-  <span class="fn">dispatch</span>(wf_relax, atlas_wg);        <span class="cm">// 16×16 tiles, 8-neighbor</span>
+<span class="fn">dispatch</span>(wf_init, atlas_wg);             <span class="cm">// seed distance field</span>
+<span class="fn">barrier</span>();
+<span class="kw">for</span> (pass in relaxation_passes) {       <span class="cm">// ~15 passes</span>
+  <span class="fn">dispatch</span>(wf_relax, atlas_wg);           <span class="cm">// 8-neighbor</span>
   <span class="fn">barrier</span>();
 }
-<span class="fn">dispatch</span>(wf_traceback, edges, <span class="num">1</span>);     <span class="cm">// predecessor → t_upper</span>
+<span class="fn">dispatch</span>(wf_traceback, active_edges);   <span class="cm">// transition edges only</span>
 <span class="fn">barrier</span>();
-<span class="fn">dispatch</span>(classify, maskW/<span class="num">8</span>, maskH/<span class="num">8</span>); <span class="cm">// per-texel</span>
+<span class="fn">dispatch</span>(classify, maskW/<span class="num">8</span>, maskH/<span class="num">8</span>);   <span class="cm">// per-texel mask</span>
 <span class="fn">barrier</span>();
-<span class="fn">dispatch</span>(blur_h, maskW/<span class="num">64</span>, maskH);  <span class="cm">// separable</span>
+<span class="fn">dispatch</span>(blur_h, maskW/<span class="num">64</span>, maskH);     <span class="cm">// separable Gaussian</span>
 <span class="fn">barrier</span>();
 <span class="fn">dispatch</span>(blur_v, maskW, maskH/<span class="num">64</span>);
+<span class="fn">barrier</span>();
+<span class="fn">generate_mipmaps</span>(crack_mask);           <span class="cm">// for LOD sampling</span>
 </pre>
     </div>
   </div>
@@ -567,17 +572,17 @@ albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
     <div class="content-block">
       <h3>Compute Budget</h3>
       <ul>
-        <li><strong>Center snapping:</strong> 1 workgroup per tile, 64 threads. ~17&times;17 search grid per tile = 289 height map samples.</li>
-        <li><strong>Wavefront pathfinding:</strong> Corridor atlas packed per-edge, 16&times;16 workgroups. Narrow fixed-width corridors (&sim;16 texels pad), iterative relaxation converges in few passes.</li>
+        <li><strong>Center snapping:</strong> 1 workgroup per tile, 64 threads. 17&times;17 candidate grid; each candidate evaluates local height contrast from fine height and blurred height (two mips).</li>
+        <li><strong>Wavefront pathfinding:</strong> Corridor atlas packed per-edge, 16&times;16 workgroups. Fixed-width corridors (tunable pad, currently 64 texels), ~15 iterative relaxation passes.</li>
         <li><strong>Classification:</strong> 8&times;8 workgroups over mask texture. Point-in-quad test iterates all tiles (use spatial acceleration for large patches).</li>
         <li><strong>Blur:</strong> Separable Gaussian, radius 4. Two passes.</li>
-        <li>Typical patch: ~50 tiles, ~80 edges, 1024&times;1024 mask &#8594; <strong>&lt;2ms total GPU time</strong></li>
+        <li>Typical patch: ~50 tiles, ~80 edges, 1024&times;1024 mask. Runs once at load time; suitable for <strong>real-time updates</strong> when terrain changes</li>
       </ul>
       <h3 class="mt-1">Memory</h3>
       <ul>
         <li>Corridor atlas: packed edge rects, R32F distance + R8UI predecessor (transient, freed after traceback)</li>
         <li>Edge output: <code>t_upper</code> offsets per chord texel, R16F + edge metadata RGBA32F</li>
-        <li>Crack mask: 1024&times;1024, R8 + mips = ~1.3MB per patch</li>
+        <li>Crack mask: 1024&times;1024, R8 + generated mips = ~1.3MB per patch</li>
       </ul>
     </div>
     <div class="content-block">
@@ -590,9 +595,9 @@ albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
         <li>Fragment shader cost: 1 texture sample + smoothstep (negligible)</li>
       </ul>
       <h3 class="mt-1">Corridor Wavefront Solver</h3>
-      <p>Each edge gets a narrow oriented corridor (fixed-width pad, not proportional to chord length). An iterative 8-neighbor relaxation on the corridor atlas finds the shortest crack-following path, then traceback projects it onto the chord as <code>t_upper</code> offsets.</p>
+      <p>Each edge gets a fixed-width oriented corridor (tunable pad, currently 64 texels corridor + 32 texels endpoint). An iterative 8-neighbor relaxation on the corridor atlas finds the shortest crack-following path; traceback runs only for transition edges and projects path points onto the chord as <code>t_upper</code> offsets.</p>
       <div class="key-insight mt-1">
-        <p>Narrow corridors keep the solve area small regardless of edge length. A simpler 64-lane monotonic DP sweep can serve as a cheaper fallback for straight edges.</p>
+        <p>Fixed-width corridors keep the solve area bounded regardless of edge length. Mip generation after blur enables LOD-aware sampling in the fragment shader.</p>
       </div>
     </div>
   </div>
@@ -608,9 +613,9 @@ albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
     </div>
     <div style="display:flex;gap:2em;justify-content:center;margin-top:1.5em;flex-wrap:wrap;">
       <div style="text-align:center;"><span style="font-size:2rem;color:var(--green);">1</span><br><span class="small">texture sample<br>per fragment</span></div>
-      <div style="text-align:center;"><span style="font-size:2rem;color:var(--accent);">&lt;2ms</span><br><span class="small">GPU compute<br>per patch</span></div>
+      <div style="text-align:center;"><span style="font-size:2rem;color:var(--accent);">async</span><br><span class="small">GPU compute<br>at load time</span></div>
       <div style="text-align:center;"><span style="font-size:2rem;color:var(--purple);">0</span><br><span class="small">engine-specific<br>dependencies</span></div>
-      <div style="text-align:center;"><span style="font-size:2rem;color:var(--cyan);">5</span><br><span class="small">compute<br>dispatches</span></div>
+      <div style="text-align:center;"><span style="font-size:2rem;color:var(--cyan);">load&#8209;time</span><br><span class="small">compute<br>once</span></div>
     </div>
   </div>
 </section>
@@ -847,7 +852,7 @@ function gaussBlur(src, w, h, radius) {
 
 // Shared tile data builder: runs the full crack-following pipeline
 // (heightmap, center snap, corridor solve, tUpper, sRangeMin)
-function buildTileData(seed, geoU, geoV, cornerStoneConfig) {
+function buildTileData(seed, geoU, geoV, cornerStoneConfig, ext) {
   const HS = 128;
   const NUM_BUCKETS = 64;
   const ECW = 72, ECH = 28;
@@ -857,9 +862,25 @@ function buildTileData(seed, geoU, geoV, cornerStoneConfig) {
   const cornerStone = cornerStoneConfig || [0, 0, 1, 0];
   const cornerUVs = [[0, 1], [1, 1], [1, 0], [0, 0]];
 
-  const height = generateStoneHeight(HS, HS, seed);
-  const albedo = generateStoneAlbedo(HS, HS, seed);
-  const blur = boxBlur(height, HS, HS, 8);
+  let height, albedo, blur;
+  if (ext) {
+    height = new Float32Array(HS * HS);
+    albedo = new Uint8Array(HS * HS * 3);
+    blur = new Float32Array(HS * HS);
+    for (let y = 0; y < HS; y++) for (let x = 0; x < HS; x++) {
+      const si = (ext.oy + y) * ext.sw + (ext.ox + x);
+      const di = y * HS + x;
+      height[di] = ext.height[si];
+      blur[di] = ext.blur[si];
+      albedo[di * 3] = ext.albedo[si * 3];
+      albedo[di * 3 + 1] = ext.albedo[si * 3 + 1];
+      albedo[di * 3 + 2] = ext.albedo[si * 3 + 2];
+    }
+  } else {
+    height = generateStoneHeight(HS, HS, seed);
+    albedo = generateStoneAlbedo(HS, HS, seed);
+    blur = boxBlur(height, HS, HS, 8);
+  }
 
   function snapToNearestCrack(geoCU, geoCV) {
     const searchRadius = 8;
@@ -1074,8 +1095,10 @@ function classifyPixel(u, v, td, opts) {
     const b0 = Math.floor(bf), b1 = Math.min(b0 + 1, td.NUM_BUCKETS - 1);
     const pathT = ed.tUpper[b0] + (ed.tUpper[b1] - ed.tUpper[b0]) * (bf - b0);
     rawSides[e] = (t - pathT) * ed.sref;
-    sLocal[e] = s;
-    sRangeMins[e] = useSRangeMin ? ed.sRangeMin : 0;
+    sLocal[e] = ed.sref < 0 ? 1 - s : s;
+    const sMin = ed.sRangeMin !== undefined ? ed.sRangeMin : 0;
+    const sMax = ed.sRangeMax !== undefined ? ed.sRangeMax : 1;
+    sRangeMins[e] = useSRangeMin ? (ed.sref < 0 ? 1 - sMax : sMin) : 0;
   }
   let assigned = 0;
   for (let i = 1; i < upToEdge; i++) {
@@ -2626,77 +2649,266 @@ slideInits[14] = function initFinal() {
   const cv = document.getElementById('cv-final');
   const ctx = cv.getContext('2d');
   const W = cv.width, H = cv.height;
-  const TW = 256, TH = 128;
+  const tilesX = 4, tilesY = 2;
+  const HS = 128;
+  const NUM_BUCKETS = 64;
+  const ECW = 72, ECH = 28;
+  const NBRS = [[0,-1],[1,0],[0,1],[-1,0],[1,-1],[1,1],[-1,1],[-1,-1]];
+  const NLEN = [1,1,1,1,Math.SQRT2,Math.SQRT2,Math.SQRT2,Math.SQRT2];
+  const sectorCorner = [1, 2, 3, 0];
+  const MW = tilesX * HS, MH = tilesY * HS;
 
-  const height = generateStoneHeight(TW, TH, 123);
-  const albedoF = generateStoneAlbedo(TW, TH, 123);
-  const blurred = boxBlur(height, TW, TH, 6);
+  // Square texture avoids aspect-ratio stretching
+  const TS = 512;
+  const bigHeight = generateStoneHeight(TS, TS, 42);
+  const bigAlbedo = generateStoneAlbedo(TS, TS, 42);
+  const bigBlur = boxBlur(bigHeight, TS, TS, 8);
 
-  // Create a multi-tile terrain with some tiles stone, some grass
-  const tilesX = 6, tilesY = 3;
-  const tileStone = [];
-  for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) {
-    tileStone.push(hashXY(tx, ty, 777) > 0.5 ? 1 : 0);
-  }
+  function render() {
+    const TEX_SCALE = 3.12;
 
-  const img = ctx.createImageData(W, H);
-  for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
-    const u = px / W, v = py / H;
-    const sx = Math.floor(u * TW) % TW, sy = Math.floor(v * TH) % TH;
-    const idx = sy * TW + sx;
-    const hv = height[idx], bv = blurred[idx];
-    const depth = bv - hv;
-    const inCrack = smoothstep(0.02, 0.1, depth);
-
-    // Tile lookup
-    const tx = Math.floor(u * tilesX), ty = Math.floor(v * tilesY);
-    const tIdx = ty * tilesX + tx;
-    const lu = u * tilesX - tx, lv = v * tilesY - ty;
-
-    // Neighbor averaging for smooth transition
-    let stoneAvg = 0, wt = 0;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      const nx = tx + dx, ny = ty + dy;
-      if (nx < 0 || nx >= tilesX || ny < 0 || ny >= tilesY) continue;
-      const dist = Math.sqrt(((lu + dx) * 0.5) ** 2 + ((lv + dy) * 0.5) ** 2);
-      const w = Math.exp(-dist * 3);
-      stoneAvg += tileStone[ny * tilesX + nx] * w;
-      wt += w;
+    function sampleH(gu, gv) {
+      const sx = ((Math.floor(gu * HS * TEX_SCALE) % TS) + TS) % TS;
+      const sy = ((Math.floor(gv * HS * TEX_SCALE) % TS) + TS) % TS;
+      const idx = sy * TS + sx;
+      return { h: bigHeight[idx], b: bigBlur[idx], idx };
     }
-    stoneAvg /= wt;
+    function crackCost(gu, gv) {
+      const s = sampleH(gu, gv);
+      const depth = s.b - s.h;
+      return smoothstep(0.01, 0.09, depth) * 1.0 + (1.0 - smoothstep(0.01, 0.09, depth)) * 16.0;
+    }
+    function snapCrack(gu, gv) {
+      const R = 8, step = 0.5 / R, ext = R * step;
+      let best = 1e10, bu = gu, bv = gv;
+      for (let dr = -R; dr <= R; dr++) for (let dc = -R; dc <= R; dc++) {
+        const su = gu + dc * step, sv = gv + dr * step;
+        const s = sampleH(su, sv);
+        const depth = s.b - s.h;
+        const inCr = smoothstep(0.01, 0.09, depth);
+        const isStone = inCr < 0.5 ? 1.0 : 0.0;
+        const dist = Math.hypot(su - gu, sv - gv) / Math.max(ext, 0.0001);
+        const score = isStone * 1000.0 + dist;
+        if (score < best) { best = score; bu = su; bv = sv; }
+      }
+      return { u: bu, v: bv };
+    }
+    function solveCorridor(cA, cB) {
+      const du = cB.u - cA.u, dv = cB.v - cA.v;
+      const len = Math.sqrt(du * du + dv * dv);
+      if (len < 0.001) return { points: [], sRangeMin: 0 };
+      const tx = du / len, ty = dv / len, nx = -ty, ny = tx;
+      const halfW = 64 / HS, pad = 4 / HS;
+      const cost = new Float32Array(ECW * ECH), dist = new Float32Array(ECW * ECH).fill(1e10);
+      const pred = new Int32Array(ECW * ECH).fill(-1), cellUV = new Float32Array(ECW * ECH * 2);
+      for (let cy = 0; cy < ECH; cy++) for (let cx = 0; cx < ECW; cx++) {
+        const s = cx / (ECW - 1), t = (cy / (ECH - 1) - 0.5) * 2;
+        const u = cA.u + tx * (s * (len + 2 * pad) - pad) + nx * t * halfW;
+        const v = cA.v + ty * (s * (len + 2 * pad) - pad) + ny * t * halfW;
+        const ci = cy * ECW + cx;
+        cost[ci] = crackCost(u, v); cellUV[ci * 2] = u; cellUV[ci * 2 + 1] = v;
+      }
+      const srcFx = pad / (len + 2 * pad) * (ECW - 1);
+      const srcX = Math.round(srcFx), srcY = Math.floor(ECH / 2);
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const sx = srcX + dx, sy = srcY + dy;
+        if (sx >= 0 && sx < ECW && sy >= 0 && sy < ECH) {
+          dist[sy * ECW + sx] = Math.sqrt(dx * dx + dy * dy) * cost[sy * ECW + sx];
+          pred[sy * ECW + sx] = sy * ECW + sx;
+        }
+      }
+      const sinkX = Math.round((len + pad) / (len + 2 * pad) * (ECW - 1));
+      for (let pass = 0; pass < ECW + ECH; pass++) {
+        let changed = false;
+        for (let y = 0; y < ECH; y++) for (let x = 0; x < ECW; x++) {
+          const idx = y * ECW + x, sc = cost[idx];
+          for (let n = 0; n < 8; n++) {
+            const bx = x + NBRS[n][0], by = y + NBRS[n][1];
+            if (bx < 0 || bx >= ECW || by < 0 || by >= ECH) continue;
+            const nIdx = by * ECW + bx, ec = NLEN[n] * 0.5 * (sc + cost[nIdx]);
+            const cand = dist[nIdx] + ec;
+            if (cand < dist[idx] - 0.001) { dist[idx] = cand; pred[idx] = nIdx; changed = true; }
+          }
+        }
+        if (!changed) break;
+      }
+      let bestIdx = Math.floor(ECH / 2) * ECW + sinkX, bestD = dist[bestIdx];
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const sx = sinkX + dx, sy = Math.floor(ECH / 2) + dy;
+        if (sx >= 0 && sx < ECW && sy >= 0 && sy < ECH && dist[sy * ECW + sx] < bestD) {
+          bestD = dist[sy * ECW + sx]; bestIdx = sy * ECW + sx;
+        }
+      }
+      const pathIndices = []; let cur = bestIdx;
+      for (let i = 0; i < ECW * ECH; i++) { pathIndices.push(cur); const p = pred[cur]; if (p < 0 || p === cur) break; cur = p; }
+      pathIndices.reverse();
+      const invLen = 1 / len; let sMin = 1.0;
+      const points = pathIndices.map(idx => {
+        const pu = cellUV[idx * 2], pv = cellUV[idx * 2 + 1];
+        sMin = Math.min(sMin, ((pu - cA.u) * tx + (pv - cA.v) * ty) * invLen);
+        return { u: pu, v: pv };
+      });
+      return { points, sRangeMin: sMin };
+    }
 
-    // Crack-aware transition
-    const crackBias = inCrack * 0.3 - 0.15;
-    const stone = smoothstep(0.3 + crackBias, 0.7 + crackBias, stoneAvg);
-    const moss = inCrack * stone * 0.35;
+    function vertStone(vx, vy) {
+      if (vx === 0 || vx === tilesX || vy === 0 || vy === tilesY) return 0;
+      return 1;
+    }
 
-    const afi = idx * 3;
-    const stR = texturesReady ? albedoF[afi] : (hv * 165 + 35), stG = texturesReady ? albedoF[afi+1] : (hv * 145 + 30), stB = texturesReady ? albedoF[afi+2] : (hv * 135 + 25);
-    const mR = stR * (1 - moss) + 45 * moss;
-    const mG = stG * (1 - moss) + 80 * moss;
-    const mB = stB * (1 - moss) + 28 * moss;
-    const gR = 50 + fbm(u * 15, v * 15, 2, 99) * 35;
-    const gG = 115 + fbm(u * 15, v * 15, 2, 100) * 45;
-    const gB = 28 + fbm(u * 15, v * 15, 2, 101) * 22;
+    const centers = [];
+    for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) {
+      centers.push(snapCrack(tx + 0.5, ty + 0.5));
+    }
+    function getCenter(tx, ty) {
+      if (tx < 0 || tx >= tilesX || ty < 0 || ty >= tilesY) return snapCrack(tx + 0.5, ty + 0.5);
+      return centers[ty * tilesX + tx];
+    }
 
-    const i = (py * W + px) * 4;
-    img.data[i] = mR * stone + gR * (1 - stone);
-    img.data[i + 1] = mG * stone + gG * (1 - stone);
-    img.data[i + 2] = mB * stone + gB * (1 - stone);
-    img.data[i + 3] = 255;
+    // Build tUpper table from path points in forward direction (cA→cB)
+    function buildFwdEdgeData(cA, cB, pts, sRangeMin) {
+      const du = cB.u - cA.u, dv = cB.v - cA.v, len = Math.sqrt(du*du + dv*dv);
+      if (len < 0.001 || pts.length < 2) return null;
+      const ttx = du/len, tty = dv/len, nx = -tty, ny = ttx, invLen = 1/len;
+      const tUpper = new Float32Array(NUM_BUCKETS).fill(-1e10);
+      for (let i = 0; i < pts.length - 1; i++) {
+        let sA = ((pts[i].u - cA.u)*ttx + (pts[i].v - cA.v)*tty)*invLen;
+        let tA = (pts[i].u - cA.u)*nx + (pts[i].v - cA.v)*ny;
+        let sB = ((pts[i+1].u - cA.u)*ttx + (pts[i+1].v - cA.v)*tty)*invLen;
+        let tB = (pts[i+1].u - cA.u)*nx + (pts[i+1].v - cA.v)*ny;
+        if (sA > sB) { let tmp=sA; sA=sB; sB=tmp; tmp=tA; tA=tB; tB=tmp; }
+        const bLo = Math.max(0, Math.min(NUM_BUCKETS-1, Math.floor(sA*(NUM_BUCKETS-1))));
+        const bHi = Math.max(0, Math.min(NUM_BUCKETS-1, Math.ceil(sB*(NUM_BUCKETS-1))));
+        const ds = Math.max(sB - sA, 1e-8);
+        for (let b = bLo; b <= bHi; b++) {
+          const sAt = b / (NUM_BUCKETS-1), frac = Math.max(0, Math.min(1, (sAt - sA)/ds));
+          const tAt = tA + (tB - tA)*frac;
+          if (tAt > tUpper[b]) tUpper[b] = tAt;
+        }
+      }
+      for (let b = 0; b < NUM_BUCKETS; b++) {
+        if (tUpper[b] > -1e9) continue;
+        let left = b-1; while (left >= 0 && tUpper[left] <= -1e9) left--;
+        let right = b+1; while (right < NUM_BUCKETS && tUpper[right] <= -1e9) right++;
+        if (left < 0 && right >= NUM_BUCKETS) tUpper[b] = 0;
+        else if (left < 0) tUpper[b] = tUpper[right];
+        else if (right >= NUM_BUCKETS) tUpper[b] = tUpper[left];
+        else tUpper[b] = tUpper[left] + (tUpper[right] - tUpper[left])*(b - left)/(right - left);
+      }
+      tUpper[0] = 0; tUpper[NUM_BUCKETS-1] = 0;
+      return { tx: ttx, ty: tty, nx, ny, invLen, tUpper, cA, sRangeMin };
+    }
+
+    const edgeKey = (tx1, ty1, tx2, ty2) => `${Math.min(tx1,tx2)},${Math.min(ty1,ty2)},${tx1===tx2?'v':'h'}`;
+    const edgeCache = {};
+    function getEdgePath(txA, tyA, txB, tyB) {
+      const key = edgeKey(txA, tyA, txB, tyB);
+      if (edgeCache[key]) return edgeCache[key];
+      const cA = getCenter(txA, tyA), cB = getCenter(txB, tyB);
+      const result = solveCorridor(cA, cB);
+      const fwdData = buildFwdEdgeData(cA, cB, result.points, result.sRangeMin);
+      edgeCache[key] = { cA, cB, result, fwdData };
+      return edgeCache[key];
+    }
+
+    const eDirs = [[0,1],[1,0],[0,-1],[-1,0]];
+
+    const tileData = [];
+    for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) {
+      const cs = [
+        vertStone(tx, ty + 1), vertStone(tx + 1, ty + 1),
+        vertStone(tx + 1, ty), vertStone(tx, ty)
+      ];
+      const center = getCenter(tx, ty);
+      const edgeData = [];
+      const paths = [];
+      for (let e = 0; e < 4; e++) {
+        const ntx = tx + eDirs[e][0], nty = ty + eDirs[e][1];
+        const edge = getEdgePath(tx, ty, ntx, nty);
+        const isForward = edge.cA.u === center.u && edge.cA.v === center.v;
+        paths.push(isForward ? edge.result.points : [...edge.result.points].reverse());
+
+        if (!edge.fwdData) { edgeData.push(null); continue; }
+
+        // Both tiles sharing an edge use the SAME forward-direction tUpper
+        // table. Only sref differs — computed from this tile's sector corner.
+        // This eliminates discretization disagreement at tile boundaries.
+        const fe = edge.fwdData;
+        const cornerUVs = [[tx, ty+1],[tx+1, ty+1],[tx+1, ty],[tx, ty]];
+        const cu = cornerUVs[sectorCorner[e]];
+        const csProj = ((cu[0] - fe.cA.u)*fe.tx + (cu[1] - fe.cA.v)*fe.ty)*fe.invLen;
+        const ctProj = (cu[0] - fe.cA.u)*fe.nx + (cu[1] - fe.cA.v)*fe.ny;
+        const csc = Math.max(0, Math.min(1, csProj));
+        const bf = csc*(NUM_BUCKETS-1), b0 = Math.floor(bf), b1 = Math.min(b0+1, NUM_BUCKETS-1);
+        const pathT = fe.tUpper[b0] + (fe.tUpper[b1] - fe.tUpper[b0])*(bf - b0);
+        const sref = (ctProj - pathT) >= 0 ? 1 : -1;
+        edgeData.push({ tx: fe.tx, ty: fe.ty, nx: fe.nx, ny: fe.ny, invLen: fe.invLen, tUpper: fe.tUpper, sref, cA: fe.cA, sRangeMin: fe.sRangeMin });
+      }
+      tileData.push({ center, edgeData, paths, cornerStone: cs, sectorCorner, NUM_BUCKETS: NUM_BUCKETS });
+    }
+
+    const rawMask = new Float32Array(MW * MH);
+    for (let py = 0; py < MH; py++) for (let px = 0; px < MW; px++) {
+      const gu = px / HS, gv = py / HS;
+      const tx = Math.min(tilesX-1, Math.floor(gu)), ty = Math.min(tilesY-1, Math.floor(gv));
+      const td = tileData[ty * tilesX + tx];
+      const r = classifyPixel(gu, gv, td, { domainGuard: true, wrapGuard: true, useSRangeMin: true });
+      rawMask[py * MW + px] = td.cornerStone[r.corner];
+    }
+
+    const blurredMask = gaussBlur(rawMask, MW, MH, 12);
+
+    const img = ctx.createImageData(W, H);
+    for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
+      const gu = px / W * tilesX, gv = py / H * tilesY;
+      const mx = Math.min(MW-1, Math.floor(px / W * MW)), my = Math.min(MH-1, Math.floor(py / H * MH));
+      const mi = my * MW + mx;
+      const stone = smoothstep(0.2, 0.8, blurredMask[mi]);
+      const s = sampleH(gu, gv);
+      const ai = s.idx * 3;
+      const stR = texturesReady ? bigAlbedo[ai] : (bigHeight[s.idx] * 160 + 40);
+      const stG = texturesReady ? bigAlbedo[ai+1] : (bigHeight[s.idx] * 140 + 35);
+      const stB = texturesReady ? bigAlbedo[ai+2] : (bigHeight[s.idx] * 130 + 30);
+      const gnorm_u = px / W, gnorm_v = py / H;
+      const gR = 55 + fbm(gnorm_u * 15, gnorm_v * 15, 2, 99) * 30;
+      const gG = 120 + fbm(gnorm_u * 15, gnorm_v * 15, 2, 100) * 40;
+      const gB = 30 + fbm(gnorm_u * 15, gnorm_v * 15, 2, 101) * 20;
+      const i = (py * W + px) * 4;
+      img.data[i]     = stR * stone + gR * (1 - stone);
+      img.data[i+1] = stG * stone + gG * (1 - stone);
+      img.data[i+2] = stB * stone + gB * (1 - stone);
+      img.data[i+3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = '#ffffff30'; ctx.lineWidth = 1;
+    for (let tx = 1; tx < tilesX; tx++) { ctx.beginPath(); ctx.moveTo(tx/tilesX*W, 0); ctx.lineTo(tx/tilesX*W, H); ctx.stroke(); }
+    for (let ty = 1; ty < tilesY; ty++) { ctx.beginPath(); ctx.moveTo(0, ty/tilesY*H); ctx.lineTo(W, ty/tilesY*H); ctx.stroke(); }
+    ctx.setLineDash([]);
+
+    const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e'];
+    for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) {
+      const td = tileData[ty * tilesX + tx];
+      ctx.save();
+      ctx.beginPath(); ctx.rect(tx/tilesX*W, ty/tilesY*H, W/tilesX, H/tilesY); ctx.clip();
+      for (let e = 0; e < 4; e++) {
+        const p = td.paths[e];
+        if (!p || p.length < 2) continue;
+        const corner = sectorCorner[e], prevCorner = sectorCorner[(e+3)%4];
+        if (td.cornerStone[corner] === td.cornerStone[prevCorner]) continue;
+        ctx.beginPath();
+        for (let i = 0; i < p.length; i++) {
+          const sx = p[i].u / tilesX * W, sy = p[i].v / tilesY * H;
+          if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+        }
+        ctx.strokeStyle = edgeColors[e]; ctx.lineWidth = 2; ctx.globalAlpha = 0.8; ctx.stroke();
+      }
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
   }
-  ctx.putImageData(img, 0, 0);
-  ctx.strokeStyle = '#30363d'; ctx.lineWidth = 1;
 
-  // Tile grid overlay
-  for (let tx = 1; tx < tilesX; tx++) {
-    ctx.beginPath(); ctx.moveTo(tx / tilesX * W, 0); ctx.lineTo(tx / tilesX * W, H);
-    ctx.strokeStyle = '#ffffff10'; ctx.stroke();
-  }
-  for (let ty = 1; ty < tilesY; ty++) {
-    ctx.beginPath(); ctx.moveTo(0, ty / tilesY * H); ctx.lineTo(W, ty / tilesY * H);
-    ctx.strokeStyle = '#ffffff10'; ctx.stroke();
-  }
+  render();
 };
 
 // ============================================================
