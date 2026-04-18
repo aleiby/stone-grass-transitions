@@ -1269,6 +1269,13 @@ function classifyPixel(u, v, td, opts) {
     if (useWrapGuard) {
       if (i === 3 && assigned === 0 && rawSides[0] > 0) continue;
     }
+    // Extent guard: the corridor solver produces wider paths than the
+    // production's wavefront, so edges can have rawSides > 0 far beyond
+    // their [0,1] s-extent via the chord-line extension (tUpper pinned
+    // to 0).  Don't let that extension overwrite an existing real claim.
+    // The production doesn't need this because its wavefront paths are
+    // tighter and rarely extend far beyond [0,1].
+    if ((sRaw[i] < -0.05 || sRaw[i] > 1.05) && rawSides[assigned] > 0) continue;
     assigned = i;
   }
   const corner = td.sectorCorner[assigned];
