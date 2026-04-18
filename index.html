@@ -314,12 +314,17 @@ pre .str { color:var(--green); } pre .type { color:var(--cyan); }
   <div class="demo-area">
     <div class="demo-panel">
       <canvas id="cv-pathfind" width="580" height="400"></canvas>
-      <div class="controls">
-        <button id="btn-path-play">&#9654; Play</button>
-        <button id="btn-path-reset">Reset</button>
-        <button id="btn-path-edge">Next Edge</button>
-        <label>speed <input type="range" id="sl-path-speed" min="1" max="20" step="1" value="8"><span class="val" id="v-path-speed">8</span></label>
-        <label>cost ratio <input type="range" id="sl-cost-ratio" min="1" max="50" step="1" value="20"><span class="val" id="v-cost-ratio">20</span></label>
+      <div class="controls" style="display:flex; gap:12px; align-items:flex-start;">
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <button id="btn-path-play">&#9654; Play</button>
+          <button id="btn-path-reset">Reset</button>
+          <button id="btn-path-edge">Next Edge</button>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <label>speed <input type="range" id="sl-path-speed" min="1" max="10" step="1" value="4"><span class="val" id="v-path-speed">4</span></label>
+          <label>cost ratio <input type="range" id="sl-cost-ratio" min="1" max="5" step="0.1" value="3"><span class="val" id="v-cost-ratio">3.0</span></label>
+          <label>corridor width <input type="range" id="sl-corridor-w" min="5" max="20" step="1" value="12"><span class="val" id="v-corridor-w">12</span></label>
+        </div>
       </div>
     </div>
     <div class="content-block" style="max-width:400px;">
@@ -1791,8 +1796,8 @@ slideInits[7] = function initPathfind() {
   for (let ty = 0; ty < TROWS; ty++) for (let tx = 0; tx < TCOLS; tx++) {
     const bl = verts[vertIdx(tx, ty + 1)], br = verts[vertIdx(tx + 1, ty + 1)];
     const tr = verts[vertIdx(tx + 1, ty)], tl = verts[vertIdx(tx, ty)];
-    tiles.push({ corners: [bl, br, tr, tl],
-      center: { x: (bl.x+br.x+tr.x+tl.x)/4, y: (bl.y+br.y+tr.y+tl.y)/4 }, col: tx, row: ty });
+    const gx = (bl.x+br.x+tr.x+tl.x)/4, gy = (bl.y+br.y+tr.y+tl.y)/4;
+    tiles.push({ corners: [bl, br, tr, tl], center: { x: gx, y: gy }, col: tx, row: ty });
   }
 
   const edges = [];
@@ -1853,20 +1858,51 @@ slideInits[7] = function initPathfind() {
     return inCrack * 1 + (1 - inCrack) * costRatio;
   }
 
+  function snapToNearestCrackPF(geoU, geoV) {
+    const searchRadius = 16;
+    const step = 1.0 / SIZE;
+    let bestScore = 1e10, bestU = geoU, bestV = geoV;
+    for (let dr = -searchRadius; dr <= searchRadius; dr++) {
+      for (let dc = -searchRadius; dc <= searchRadius; dc++) {
+        const su = geoU + dc * step, sv = geoV + dr * step;
+        const sx = Math.max(0, Math.min(SIZE-1, Math.floor(su * SIZE)));
+        const sy = Math.max(0, Math.min(SIZE-1, Math.floor(sv * SIZE)));
+        const idx = sy * SIZE + sx;
+        const depth = blurred[idx] - height[idx];
+        const inCrack = smoothstep(0.02, 0.1, depth);
+        const isStone = inCrack < 0.5 ? 1.0 : 0.0;
+        const dist = Math.sqrt(dc * dc + dr * dr);
+        const score = isStone * 1000.0 + dist;
+        if (score < bestScore) { bestScore = score; bestU = su; bestV = sv; }
+      }
+    }
+    return { u: bestU, v: bestV };
+  }
+
+  for (let ti = 0; ti < tiles.length; ti++) {
+    const snapped = snapToNearestCrackPF(tiles[ti].center.x / W, tiles[ti].center.y / H);
+    tiles[ti].center = { x: snapped.u * W, y: snapped.v * H };
+  }
+
   // Wavefront corridor solver
-  const CW = 72, CH = 28;
   const NBRS = [[0,-1],[1,0],[0,1],[-1,0],[1,-1],[1,1],[-1,1],[-1,-1]];
   const NLEN = [1,1,1,1,Math.SQRT2,Math.SQRT2,Math.SQRT2,Math.SQRT2];
+  let CW, CH;
 
   function buildCorridor() {
     const e = edges[activeEdge];
-    const cA = { u: tiles[e.tileA].center.x / W, v: tiles[e.tileA].center.y / H };
-    const cB = { u: tiles[e.tileB].center.x / W, v: tiles[e.tileB].center.y / H };
-    const du = cB.u - cA.u, dv = cB.v - cA.v;
-    const len = Math.sqrt(du*du + dv*dv);
-    const tx = du/len, ty = dv/len, nx = -ty, ny = tx;
-    const halfW = len * 0.35;
-    const pad = len * 0.05;
+    const pxA = tiles[e.tileA].center, pxB = tiles[e.tileB].center;
+    const dpx = pxB.x - pxA.x, dpy = pxB.y - pxA.y;
+    const pxLen = Math.sqrt(dpx*dpx + dpy*dpy);
+    const tx = dpx/pxLen, ty = dpy/pxLen, nx = -ty, ny = tx;
+    const corridorW = parseInt(document.getElementById('sl-corridor-w').value);
+    const pxPerTexel = Math.max(W, H) / SIZE;
+    const halfW = corridorW * 0.5 * pxPerTexel;
+    const padTexels = 4;
+    const pad = padTexels * pxPerTexel;
+    const chordTexels = Math.round(pxLen / pxPerTexel);
+    CW = chordTexels + padTexels * 2;
+    CH = corridorW;
 
     const cost = new Float32Array(CW * CH);
     const dist = new Float32Array(CW * CH).fill(1e10);
@@ -1876,16 +1912,15 @@ slideInits[7] = function initPathfind() {
     for (let cy = 0; cy < CH; cy++) for (let cx = 0; cx < CW; cx++) {
       const s = cx / (CW - 1);
       const t = (cy / (CH - 1) - 0.5) * 2;
-      const u = cA.u + tx * (s * (len + 2*pad) - pad) + nx * t * halfW;
-      const v = cA.v + ty * (s * (len + 2*pad) - pad) + ny * t * halfW;
+      const px = pxA.x + tx * (s * (pxLen + 2*pad) - pad) + nx * t * halfW;
+      const py = pxA.y + ty * (s * (pxLen + 2*pad) - pad) + ny * t * halfW;
       const ci = cy * CW + cx;
-      cost[ci] = getCost(u, v);
-      cellPx[ci*2] = u * W;
-      cellPx[ci*2+1] = v * H;
+      cost[ci] = getCost(px / W, py / H);
+      cellPx[ci*2] = px;
+      cellPx[ci*2+1] = py;
     }
 
-    // Seed source: center A maps to s≈pad/(len+2*pad), t=0
-    const srcFx = pad / (len + 2*pad) * (CW - 1);
+    const srcFx = pad / (pxLen + 2*pad) * (CW - 1);
     const srcX = Math.round(srcFx), srcY = Math.floor(CH / 2);
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       const nx2 = srcX + dx, ny2 = srcY + dy;
@@ -1896,11 +1931,10 @@ slideInits[7] = function initPathfind() {
       }
     }
 
-    // Sink: center B maps to s≈(len+pad)/(len+2*pad)
-    const sinkFx = (len + pad) / (len + 2*pad) * (CW - 1);
+    const sinkFx = (pxLen + pad) / (pxLen + 2*pad) * (CW - 1);
     const sinkX = Math.round(sinkFx), sinkY = Math.floor(CH / 2);
 
-    return { cost, dist, pred, cellPx, cA, cB, len, tx, ty, nx, ny, halfW,
+    return { cost, dist, pred, cellPx, pxA, pxB, pxLen, tx, ty, nx, ny, halfW,
              srcX, srcY, sinkX, sinkY, relaxPass: 0, maxDist: 0, path: null, sorted: null };
   }
 
@@ -1932,7 +1966,7 @@ slideInits[7] = function initPathfind() {
   }
 
   function solveAndSort(wf) {
-    for (let p = 0; p < 60; p++) { if (!relaxPass(wf)) break; }
+    for (let p = 0; p < CW + CH; p++) { if (!relaxPass(wf)) break; }
     // Find max reachable distance
     let maxD = 0;
     for (let i = 0; i < CW * CH; i++) { if (wf.dist[i] < 1e9 && wf.dist[i] > maxD) maxD = wf.dist[i]; }
@@ -2042,7 +2076,7 @@ slideInits[7] = function initPathfind() {
   function reset() {
     playing = false;
     if (animFrame) cancelAnimationFrame(animFrame);
-    costRatio = parseInt(document.getElementById('sl-cost-ratio').value);
+    costRatio = parseFloat(document.getElementById('sl-cost-ratio').value);
     wfState = buildCorridor();
     solveAndSort(wfState);
     revealCount = 0;
@@ -2050,11 +2084,16 @@ slideInits[7] = function initPathfind() {
   }
 
   function animate() {
-    const speed = parseInt(document.getElementById('sl-path-speed').value);
-    revealCount += speed * 8;
-    if (revealCount > wfState.sorted.length) {
+    const speed = parseInt(document.getElementById('sl-path-speed').value) / 2;
+    if (speed >= 5) {
       revealCount = wfState.sorted.length + 1;
       playing = false;
+    } else {
+      revealCount += speed * 8;
+      if (revealCount > wfState.sorted.length) {
+        revealCount = wfState.sorted.length + 1;
+        playing = false;
+      }
     }
     draw();
     if (playing) animFrame = requestAnimationFrame(animate);
@@ -2071,15 +2110,30 @@ slideInits[7] = function initPathfind() {
     if (animFrame) cancelAnimationFrame(animFrame);
     activeEdge = (activeEdge + 1) % edges.length;
     reset();
+    playing = true;
+    animate();
   };
   document.getElementById('sl-cost-ratio').oninput = () => {
-    document.getElementById('v-cost-ratio').textContent = document.getElementById('sl-cost-ratio').value;
+    document.getElementById('v-cost-ratio').textContent = parseFloat(document.getElementById('sl-cost-ratio').value).toFixed(1);
+    costRatio = parseFloat(document.getElementById('sl-cost-ratio').value);
+    reset();
+    playing = true;
+    animate();
   };
   document.getElementById('sl-path-speed').oninput = () => {
-    document.getElementById('v-path-speed').textContent = document.getElementById('sl-path-speed').value;
+    const v = parseInt(document.getElementById('sl-path-speed').value);
+    document.getElementById('v-path-speed').textContent = v >= 10 ? 'max' : v;
+  };
+  document.getElementById('sl-corridor-w').oninput = () => {
+    document.getElementById('v-corridor-w').textContent = document.getElementById('sl-corridor-w').value;
+    reset();
+    playing = true;
+    animate();
   };
 
   reset();
+  playing = true;
+  animate();
 };
 
 // ============================================================
