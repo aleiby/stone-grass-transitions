@@ -196,7 +196,7 @@ pre .str { color:var(--green); } pre .type { color:var(--cyan); }
 
 <!-- ==================== SLIDE 3: DUAL GRID ==================== -->
 <section class="slide" id="s-dualgrid">
-  <h2>The Irregular Dual Grid</h2>
+  <h2>Tile Grid Setup</h2>
   <div class="demo-area">
     <div class="demo-panel">
       <canvas id="cv-dualgrid" width="480" height="400"></canvas>
@@ -207,11 +207,12 @@ pre .str { color:var(--green); } pre .type { color:var(--cyan); }
       </div>
     </div>
     <div class="content-block" style="max-width:400px;">
-      <h3>16 corner configs &#10132; 6 tile cases</h3>
-      <p class="mb-1">Each dual cell has 4 corners, each grass or water. The 16 possible configurations reduce to 6 unique shapes via rotation:</p>
+      <h3>Tiles with shared edges</h3>
+      <p class="mb-1">The transition system operates on <strong>quad tiles with shared edges</strong>. Each tile has 4 corners and a geometric center. Adjacent tiles share edge paths. The stone texture tiles independently of the grid &mdash; tile boundaries do <em>not</em> align to texture seams.</p>
+      <p class="mb-1">This works with any quad grid: regular, irregular, or procedural. Our implementation uses a <strong>Stalberg irregular dual grid</strong> arranged into hexagonal patches, but the technique is grid-topology-agnostic.</p>
       <div class="tile-grid" id="tile-grid-display"></div>
       <div class="case-legend" id="case-legend"></div>
-      <p class="small mt-1">This same grid also carries <strong>surface type</strong> (stone vs grass) per corner — a separate 4-bit mask that drives the transition system.</p>
+      <p class="small mt-1">The 16 corner configurations reduce to 6 unique cases via rotation. Each corner carries a <strong>surface type</strong> (stone vs grass) &mdash; a 4-bit mask that drives the transition.</p>
     </div>
   </div>
 </section>
@@ -283,93 +284,170 @@ pre .str { color:var(--green); } pre .type { color:var(--cyan); }
     <div class="demo-panel">
       <canvas id="cv-centers" width="480" height="400"></canvas>
       <div class="controls">
-        <button id="btn-centers-regen">Regenerate</button>
-        <label>search radius <input type="range" id="sl-search-rad" min="2" max="16" step="1" value="8"><span class="val" id="v-search-rad">8</span></label>
+        <button id="btn-centers-regen">New Texture</button>
+        <label>search radius <input type="range" id="sl-search-rad" min="2" max="8" step="1" value="4"><span class="val" id="v-search-rad">4</span></label>
       </div>
+      <div style="color:var(--dim);font-size:0.8em;margin-top:4px;">Drag the shared center vertex to reshape tiles</div>
     </div>
     <div class="content-block" style="max-width:400px;">
       <h3>From geometric to crack center</h3>
-      <p>Each tile's geometric center (centroid of its 4 corners) may land on solid stone. We search the local neighborhood for the nearest crack pixel.</p>
+      <p>Each tile's geometric center (centroid of its 4 corners) typically lands on solid stone, since stones are larger than the gaps between them. We search the neighborhood for the best crack pixel.</p>
       <div class="key-insight mt-1">
-        <p><strong>Two-tier scoring:</strong> Any crack pixel beats any stone pixel (cost 0 vs 1000). Among crack pixels, prefer the closest to the geometric center. This ensures paths start and end inside the crack network.</p>
+        <p><strong>Two-tier scoring:</strong> Any crack pixel beats any stone pixel (cost 0 vs 1000). Among crack pixels, prefer the closest to the geometric center. This ensures edge paths start and end inside the crack network.</p>
       </div>
       <pre class="mt-1">
+<span class="type">float</span> in_crack = <span class="fn">smoothstep</span>(mid - s, mid + s,
+                          h_blur - h_pixel);
+<span class="type">float</span> is_stone = in_crack &lt; <span class="num">0.5</span> ? <span class="num">1.0</span> : <span class="num">0.0</span>;
 <span class="type">float</span> score = is_stone * <span class="num">1000.0</span> + dist;
-<span class="cm">// crack at distance 0.9 beats stone at distance 0.01</span>
 </pre>
+      <p class="small mt-1">The search is sparse: step size scales with tile edge length, so the 17&times;17 grid always covers ~50% of the tile from center. Larger tiles sample fewer texels per step. This is fine because cracks are wide features&mdash;sub-texel precision isn't needed to land inside one.</p>
+      <h3 class="mt-1">GPU parallelism</h3>
+      <p>One workgroup of 64 threads per tile. Each thread takes one row of the 17-column search grid, finds its row-best score, and writes it to shared memory. Thread 0 picks the global winner, then the winning thread re-derives its best UV and writes the output&mdash;17 texture reads per active thread.</p>
     </div>
   </div>
 </section>
 
 <!-- ==================== SLIDE 7: PATHFINDING ==================== -->
 <section class="slide" id="s-pathfind">
-  <h2>Step 3: Edge Pathfinding — Monotonic DP</h2>
+  <h2>Step 3: Edge Pathfinding — Corridor Wavefront</h2>
   <div class="demo-area">
     <div class="demo-panel">
       <canvas id="cv-pathfind" width="580" height="400"></canvas>
       <div class="controls">
         <button id="btn-path-play">&#9654; Play</button>
-        <button id="btn-path-step">Step</button>
         <button id="btn-path-reset">Reset</button>
-        <label>speed <input type="range" id="sl-path-speed" min="1" max="20" step="1" value="5"><span class="val" id="v-path-speed">5</span></label>
+        <button id="btn-path-edge">Next Edge</button>
+        <label>speed <input type="range" id="sl-path-speed" min="1" max="20" step="1" value="8"><span class="val" id="v-path-speed">8</span></label>
         <label>cost ratio <input type="range" id="sl-cost-ratio" min="1" max="50" step="1" value="20"><span class="val" id="v-cost-ratio">20</span></label>
       </div>
     </div>
-    <div class="content-block" style="max-width:380px;">
-      <h3>Rotated-frame monotonic sweep</h3>
-      <p>For each edge (pair of adjacent tile centers), we sweep 65 steps along the center-to-center vector with 64 perpendicular lanes.</p>
-      <p class="mt-1">The cost field makes cracks cheap and stone expensive. The DP finds the minimum-cost path constrained to advance monotonically along the tangent.</p>
+    <div class="content-block" style="max-width:400px;">
+      <h3>2D shortest path in a corridor</h3>
+      <p>For each shared edge, an oriented texel corridor is built between the two tile centers in texture space. An 8-neighbor weighted relaxation finds the shortest path through the crack cost field &mdash; no centerline bias, no lane constraints.</p>
+      <p class="mt-1">The wavefront can follow cracks that bend, fork, or drift away from the chord. The result is projected onto the edge chord as a <code>t_upper</code> offset table that the classifier samples to determine side-of-path.</p>
       <pre class="mt-1">
-<span class="cm">// Per lane: check ±max_step neighbors</span>
-<span class="kw">for</span> (<span class="type">int</span> dr = <span class="num">0</span>; dr <= max_step; dr++) {
-  <span class="type">float</span> candidate = dp_prev[from]
-    + cell_cost + dr * diagonal_penalty;
-  <span class="kw">if</span> (candidate < best) {
-    best = candidate;
-    best_from = from;
-  }
+<span class="cm">// 8-neighbor relaxation per corridor texel</span>
+<span class="type">float</span> move_len = n &lt; <span class="num">4</span> ? <span class="num">1.0</span> : <span class="fn">sqrt</span>(<span class="num">2.0</span>);
+<span class="type">float</span> edge_cost = move_len * <span class="num">0.5</span>
+  * (self_cost + neighbor_cost);
+<span class="type">float</span> cand = dist[neighbor] + edge_cost;
+<span class="kw">if</span> (cand &lt; best) {
+  best = cand;
+  best_pred = neighbor;
 }
+</pre>
+      <p class="small mt-1">A cheaper fallback uses a fixed 64-lane monotonic DP sweep along the chord, but it cannot represent 2D detours. The narrow corridor keeps the wavefront solve area small regardless of edge length.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== SLIDE 8: SHARED EDGES ==================== -->
+<section class="slide" id="s-shared-edges">
+  <h2>Step 4a: Shared Edges &amp; Signed References</h2>
+  <div class="demo-area">
+    <div class="demo-panel">
+      <canvas id="cv-shared-edges" width="560" height="320"></canvas>
+      <div class="controls">
+        <button id="btn-view-a" class="active">View from Tile A</button>
+        <button id="btn-view-b">View from Tile B</button>
+        <button id="btn-edge-regen">New Path</button>
+      </div>
+    </div>
+    <div class="content-block" style="max-width:420px;">
+      <h3>Edge paths are shared</h3>
+      <p class="mb-1">Each crack-following path connects two adjacent tile centers. Both tiles reference the <em>same</em> path data, but from opposite perspectives.</p>
+      <h3>The <code>sref</code> sign</h3>
+      <p class="mb-1">A <strong>signed edge reference</strong> tells each tile how to interpret the shared path:</p>
+      <ul>
+        <li><code>sref &gt; 0</code>: path origin (s=0) is at <em>our</em> center</li>
+        <li><code>sref &lt; 0</code>: path was created from the neighbor's perspective &mdash; flip <code>s_local = 1 - s_param</code> and negate the side test</li>
+      </ul>
+      <div class="key-insight mt-1">
+        <p>Without this normalization, the positive/negative side of the path inverts for half the tiles, creating seams at every shared edge.</p>
+      </div>
+      <pre class="mt-1">
+<span class="cm">// Normalize s so s=0 is always at OUR center</span>
+s_local = sref &lt; <span class="num">0</span> ? (<span class="num">1.0</span> - s_param) : s_param;
+<span class="cm">// Flip side test for reversed references</span>
+<span class="kw">if</span> (sref &lt; <span class="num">0</span>) raw_side = -raw_side;
 </pre>
     </div>
   </div>
 </section>
 
-<!-- ==================== SLIDE 8: FLAP FOLDING ==================== -->
-<section class="slide" id="s-flaps">
-  <h2>Step 4: Flap Folding — The Sequential Overwrite Classifier</h2>
+<!-- ==================== SLIDE 9: SEQUENTIAL OVERWRITE ==================== -->
+<section class="slide" id="s-seq-overwrite">
+  <h2>Step 4b: The Sequential Overwrite Classifier</h2>
   <div class="demo-area">
     <div class="demo-panel">
       <canvas id="cv-flaps" width="480" height="480"></canvas>
       <div class="controls">
-        <button id="btn-flap-animate">Animate</button>
+        <button id="btn-flap-step">Step</button>
+        <button id="btn-flap-animate">Play All</button>
         <button id="btn-flap-regen">New Paths</button>
         <label>Show paths <input type="checkbox" id="chk-flap-paths" checked></label>
+        <span id="flap-step-label" style="color:var(--dim);font-size:0.85em;">All edges</span>
       </div>
     </div>
-    <div class="content-block" style="max-width:400px;">
-      <h3>Why not simple 2D quadrants?</h3>
-      <p class="mb-1">Crack paths are curved and at arbitrary angles. A fixed quadrant split (NE/SE/SW/NW) fails when paths tilt. Instead, we process edges S&#10132;E&#10132;N&#10132;W, each one <em>overwriting</em> the classification for pixels on its positive side.</p>
+    <div class="content-block" style="max-width:420px;">
+      <h3>Why not simple quadrants?</h3>
+      <p class="mb-1">Crack paths are curved, at arbitrary angles, and don't intersect at a single point. A fixed NE/SE/SW/NW split fails. Instead, we process edges <strong>S&#10132;E&#10132;N&#10132;W</strong> in sequence &mdash; each edge <em>overwrites</em> the previous classification for all pixels on its positive side.</p>
 
-      <h3>The algorithm</h3>
-      <p>For each pixel, evaluate all 4 edge paths. The <strong>last edge whose positive side contains this pixel</strong> (with domain guards) determines which corner owns it.</p>
+      <h3>The core loop</h3>
+      <p class="mb-1">Start assigned to the S edge. For each subsequent edge, if the pixel is on its positive side and passes the guards, that edge takes ownership.</p>
       <pre class="mt-1">
-<span class="cm">// sector_corner maps edge → corner</span>
-<span class="cm">// S→BR, E→TR, N→TL, W→BL</span>
-<span class="type">int</span> sector_corner[<span class="num">4</span>] = {<span class="num">1</span>,<span class="num">2</span>,<span class="num">3</span>,<span class="num">0</span>};
-<span class="type">int</span> assigned = <span class="num">0</span>; <span class="cm">// start with S edge</span>
-<span class="kw">for</span> (<span class="type">int</span> i = <span class="num">1</span>; i < <span class="num">4</span>; i++) {
-  <span class="kw">if</span> (side[i] <= <span class="num">0</span>) <span class="kw">continue</span>;
-  <span class="cm">// domain + wrap guards...</span>
+<span class="type">const int</span> sector_corner[<span class="num">4</span>] = {<span class="num">1</span>,<span class="num">2</span>,<span class="num">3</span>,<span class="num">0</span>};
+<span class="cm">// S→BR  E→TR  N→TL  W→BL</span>
+<span class="type">int</span> assigned = <span class="num">0</span>;
+<span class="kw">for</span> (<span class="type">int</span> i = <span class="num">1</span>; i &lt; <span class="num">4</span>; i++) {
+  <span class="kw">if</span> (raw_sides[i] &lt;= <span class="num">0.0</span>) <span class="kw">continue</span>;
+  <span class="cm">// domain guard (next slide)</span>
+  <span class="cm">// wrap guard (next slide)</span>
   assigned = i;
 }
 corner = sector_corner[assigned];
 </pre>
-      <p class="small mt-1">The <strong>wrap guard</strong> prevents W from stealing pixels that S legitimately owns when they run nearly parallel.</p>
+      <p class="small mt-1">Click <strong>Step</strong> to watch each edge claim its territory, or <strong>Play All</strong> to see the full sequence animate.</p>
     </div>
   </div>
 </section>
 
-<!-- ==================== SLIDE 9: MASK GENERATION ==================== -->
+<!-- ==================== SLIDE 10: DOMAIN GUARDS ==================== -->
+<section class="slide" id="s-domain-guards">
+  <h2>Step 4c: Domain &amp; Wrap Guards</h2>
+  <div class="demo-area">
+    <div class="demo-panel">
+      <canvas id="cv-guards" width="480" height="480"></canvas>
+      <div class="controls">
+        <label><input type="checkbox" id="chk-guard-domain" checked> Domain guard</label>
+        <label><input type="checkbox" id="chk-guard-wrap" checked> Wrap guard</label>
+        <button id="btn-guard-regen">New Paths</button>
+      </div>
+    </div>
+    <div class="content-block" style="max-width:420px;">
+      <h3>Domain guard</h3>
+      <p class="mb-1">Near a tile boundary, <code>s_local</code> approaches 1.0 &mdash; the pixel is closer to the <em>neighbor's</em> center than ours. The domain guard prevents an out-of-range edge from overwriting one that has a valid claim:</p>
+      <pre class="mt-1">
+<span class="type">bool</span> new_in_range = s_local[i] &gt; <span class="num">0.0</span>;
+<span class="type">bool</span> cur_in_range = s_local[assigned] &gt; <span class="num">0.0</span>
+                 &amp;&amp; raw_sides[assigned] &gt; <span class="num">0.0</span>;
+<span class="kw">if</span> (!new_in_range &amp;&amp; cur_in_range)
+  <span class="kw">continue</span>;
+</pre>
+      <h3>Wrap guard</h3>
+      <p class="mb-1">The loop processes S&#10132;E&#10132;N&#10132;W. Without protection, W (the last edge) could overwrite S (the first) &mdash; creating artifacts where two nearly-parallel paths compete:</p>
+      <pre class="mt-1">
+<span class="kw">if</span> (i == <span class="num">3</span> &amp;&amp; assigned == <span class="num">0</span>
+    &amp;&amp; raw_sides[<span class="num">0</span>] &gt; <span class="num">0.0</span>)
+  <span class="kw">continue</span>;
+</pre>
+      <p class="small mt-1">Toggle each guard off to see the artifacts it prevents. The domain guard avoids bleed from neighboring tiles; the wrap guard prevents S/W competition.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== SLIDE 11: MASK GENERATION ==================== -->
 <section class="slide" id="s-mask">
   <h2>Step 5: Per-Patch Mask Generation</h2>
   <div class="demo-area">
@@ -395,7 +473,7 @@ corner = sector_corner[assigned];
   </div>
 </section>
 
-<!-- ==================== SLIDE 10: INTEGRATION ==================== -->
+<!-- ==================== SLIDE 12: INTEGRATION ==================== -->
 <section class="slide" id="s-integration">
   <h2>Fragment Shader Integration</h2>
   <div class="two-col">
@@ -445,7 +523,13 @@ albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
 <span class="cm">// All dispatched in a single command buffer</span>
 <span class="fn">dispatch</span>(find_centers, tiles, <span class="num">1</span>);   <span class="cm">// 64 threads/tile</span>
 <span class="fn">barrier</span>();
-<span class="fn">dispatch</span>(pathfind, edges, <span class="num">1</span>);       <span class="cm">// 64 threads/edge</span>
+<span class="fn">dispatch</span>(wf_init, atlas_wg);          <span class="cm">// seed distance field</span>
+<span class="fn">barrier</span>();
+<span class="kw">for</span> (pass in relaxation_passes) {
+  <span class="fn">dispatch</span>(wf_relax, atlas_wg);        <span class="cm">// 16×16 tiles, 8-neighbor</span>
+  <span class="fn">barrier</span>();
+}
+<span class="fn">dispatch</span>(wf_traceback, edges, <span class="num">1</span>);     <span class="cm">// predecessor → t_upper</span>
 <span class="fn">barrier</span>();
 <span class="fn">dispatch</span>(classify, maskW/<span class="num">8</span>, maskH/<span class="num">8</span>); <span class="cm">// per-texel</span>
 <span class="fn">barrier</span>();
@@ -457,7 +541,7 @@ albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
   </div>
 </section>
 
-<!-- ==================== SLIDE 11: PERFORMANCE ==================== -->
+<!-- ==================== SLIDE 13: PERFORMANCE ==================== -->
 <section class="slide" id="s-perf">
   <h2>Performance &amp; Implementation Notes</h2>
   <div class="two-col">
@@ -465,15 +549,15 @@ albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
       <h3>Compute Budget</h3>
       <ul>
         <li><strong>Center snapping:</strong> 1 workgroup per tile, 64 threads. ~17&times;17 search grid per tile = 289 height map samples.</li>
-        <li><strong>DP pathfinding:</strong> 1 workgroup per edge, 64 threads. 65 steps &times; 64 lanes = 4160 cost evaluations per edge.</li>
+        <li><strong>Wavefront pathfinding:</strong> Corridor atlas packed per-edge, 16&times;16 workgroups. Narrow fixed-width corridors (&sim;16 texels pad), iterative relaxation converges in few passes.</li>
         <li><strong>Classification:</strong> 8&times;8 workgroups over mask texture. Point-in-quad test iterates all tiles (use spatial acceleration for large patches).</li>
         <li><strong>Blur:</strong> Separable Gaussian, radius 4. Two passes.</li>
         <li>Typical patch: ~50 tiles, ~80 edges, 1024&times;1024 mask &#8594; <strong>&lt;2ms total GPU time</strong></li>
       </ul>
       <h3 class="mt-1">Memory</h3>
       <ul>
-        <li>Edge paths: 65 &times; edges, R8 = ~5KB per patch</li>
-        <li>Edge metadata: 2 &times; edges, RGBA32F = ~2.5KB</li>
+        <li>Corridor atlas: packed edge rects, R32F distance + R8UI predecessor (transient, freed after traceback)</li>
+        <li>Edge output: <code>t_upper</code> offsets per chord texel, R16F + edge metadata RGBA32F</li>
         <li>Crack mask: 1024&times;1024, R8 + mips = ~1.3MB per patch</li>
       </ul>
     </div>
@@ -486,16 +570,16 @@ albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
         <li>Compute pathfinding once at <strong>terrain load time</strong> (not per-frame)</li>
         <li>Fragment shader cost: 1 texture sample + smoothstep (negligible)</li>
       </ul>
-      <h3 class="mt-1">Alternative: Wavefront Relaxation</h3>
-      <p>For higher quality, replace DP with a full shortest-path solve via iterative relaxation on a corridor atlas. Trades the 64-lane band limit for texel-resolution paths at the cost of multiple relaxation passes.</p>
+      <h3 class="mt-1">Corridor Wavefront Solver</h3>
+      <p>Each edge gets a narrow oriented corridor (fixed-width pad, not proportional to chord length). An iterative 8-neighbor relaxation on the corridor atlas finds the shortest crack-following path, then traceback projects it onto the chord as <code>t_upper</code> offsets.</p>
       <div class="key-insight mt-1">
-        <p>The DP approach is sufficient for most use cases. The wavefront variant is only needed when paths must traverse very wide corridors at shallow angles.</p>
+        <p>Narrow corridors keep the solve area small regardless of edge length. A simpler 64-lane monotonic DP sweep can serve as a cheaper fallback for straight edges.</p>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ==================== SLIDE 12: SUMMARY ==================== -->
+<!-- ==================== SLIDE 14: SUMMARY ==================== -->
 <section class="slide" id="s-summary">
   <h2>Summary</h2>
   <div class="content-block" style="text-align:center;">
@@ -517,7 +601,7 @@ albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
 <!-- Navigation -->
 <div class="nav">
   <button id="btn-prev" title="Previous (←)">&#8249;</button>
-  <span class="page" id="page-indicator">1 / 13</span>
+  <span class="page" id="page-indicator">1 / 15</span>
   <button id="btn-next" title="Next (→)">&#8250;</button>
 </div>
 
@@ -688,19 +772,6 @@ function worley(x, y, freq, seed) {
   return minD;
 }
 
-function generateStoneHeight(w, h, seed) {
-  const data = new Float32Array(w * h);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const u = x / w, v = y / h;
-    const cellDist = worley(u, v, 6, seed || 42);
-    const baseH = 1 - Math.min(cellDist * 2.2, 1);
-    const detail = fbm(u * 8, v * 8, 3, (seed || 42) + 100) * 0.15;
-    const broad = fbm(u * 2, v * 2, 2, (seed || 42) + 200) * 0.2;
-    data[y * w + x] = Math.max(0, Math.min(1, baseH + detail + broad));
-  }
-  return data;
-}
-
 function boxBlur(src, w, h, radius) {
   const dst = new Float32Array(w * h);
   const tmp = new Float32Array(w * h);
@@ -777,57 +848,243 @@ slideInits[1] = function initMotivation() {
   const albedo = generateStoneAlbedo(HS, HS, 42);
   const blur = boxBlur(height, HS, HS, 8);
 
-  function drawTile(cvId, useCracks) {
-    const cv = document.getElementById(cvId);
+  // 3 grass corners (BL, BR, TL), 1 stone corner (TR)
+  // Canvas v-down: TL(0,0) TR(1,0) BL(0,1) BR(1,1)
+  // TR stone: s0 = (u + (1-v)) / 2 — diagonal centered on v=u line
+
+  function drawLeft() {
+    const cv = document.getElementById('cv-bilinear');
     const ctx = cv.getContext('2d');
     const img = ctx.createImageData(S, S);
-
     for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
       const u = px / S, v = py / S;
       const sx = Math.floor(u * HS), sy = Math.floor(v * HS);
       const idx = sy * HS + sx;
-      const hv = height[idx], bv = blur[idx];
-      const crackDepth = bv - hv;
-      const inCrack = smoothstep(0.02, 0.1, crackDepth);
-
-      let stoneFactor;
-      if (useCracks) {
-        const cx = u - 0.5, cy = v - 0.5;
-        const rawAngle = Math.atan2(cy, cx);
-        const edgeDist = Math.max(Math.abs(cx), Math.abs(cy));
-        const pathOffset = inCrack * 0.15 * Math.sin(rawAngle * 3 + crackDepth * 20);
-        stoneFactor = smoothstep(0.45 + pathOffset, 0.55 + pathOffset, edgeDist + (inCrack - 0.5) * 0.1);
-        stoneFactor = Math.max(0, Math.min(1, stoneFactor));
-      } else {
-        const dist = Math.sqrt((u - 0.5) ** 2 + (v - 0.5) ** 2);
-        stoneFactor = smoothstep(0.25, 0.45, dist);
-      }
-
+      const hv = height[idx];
+      const s0 = (u + (1 - v)) / 2;
+      const stone = smoothstep(0.3, 0.7, s0);
       const ai = idx * 3;
-      const stoneR = albedo[ai] || (hv * 160 + 40);
-      const stoneG = albedo[ai+1] || (hv * 140 + 35);
-      const stoneB = albedo[ai+2] || (hv * 130 + 30);
-      const mossAmt = useCracks ? inCrack * stoneFactor * 0.4 : 0;
-      const sR = stoneR * (1 - mossAmt) + 45 * mossAmt;
-      const sG = stoneG * (1 - mossAmt) + 76 * mossAmt;
-      const sB = stoneB * (1 - mossAmt) + 30 * mossAmt;
-      const grassR = 55 + fbm(u * 10, v * 10, 2, 99) * 30;
-      const grassG = 120 + fbm(u * 10, v * 10, 2, 100) * 40;
-      const grassB = 30 + fbm(u * 10, v * 10, 2, 101) * 20;
-
+      const stR = texturesReady ? albedo[ai] : (hv * 160 + 40);
+      const stG = texturesReady ? albedo[ai+1] : (hv * 140 + 35);
+      const stB = texturesReady ? albedo[ai+2] : (hv * 130 + 30);
+      const gR = 55 + fbm(u * 10, v * 10, 2, 99) * 30;
+      const gG = 120 + fbm(u * 10, v * 10, 2, 100) * 40;
+      const gB = 30 + fbm(u * 10, v * 10, 2, 101) * 20;
       const i = (py * S + px) * 4;
-      img.data[i] = sR * stoneFactor + grassR * (1 - stoneFactor);
-      img.data[i + 1] = sG * stoneFactor + grassG * (1 - stoneFactor);
-      img.data[i + 2] = sB * stoneFactor + grassB * (1 - stoneFactor);
-      img.data[i + 3] = 255;
+      img.data[i] = stR * stone + gR * (1 - stone);
+      img.data[i+1] = stG * stone + gG * (1 - stone);
+      img.data[i+2] = stB * stone + gB * (1 - stone);
+      img.data[i+3] = 255;
     }
     ctx.putImageData(img, 0, 0);
     ctx.strokeStyle = '#30363d'; ctx.lineWidth = 2;
     ctx.strokeRect(0, 0, S, S);
   }
 
-  drawTile('cv-bilinear', false);
-  drawTile('cv-crackfollow', true);
+  function drawRight() {
+    const cv = document.getElementById('cv-crackfollow');
+    const ctx = cv.getContext('2d');
+    const img = ctx.createImageData(S, S);
+
+    // Draw stone texture with crack overlay
+    for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
+      const u = px / S, v = py / S;
+      const sx = Math.floor(u * HS), sy = Math.floor(v * HS);
+      const idx = sy * HS + sx;
+      const hv = height[idx];
+      const depth = blur[idx] - hv;
+      const inCrack = smoothstep(0.01, 0.09, depth);
+      const ai = idx * 3;
+      const aR = texturesReady ? albedo[ai] : (hv * 160 + 40);
+      const aG = texturesReady ? albedo[ai+1] : (hv * 140 + 35);
+      const aB = texturesReady ? albedo[ai+2] : (hv * 130 + 30);
+      const i = (py * S + px) * 4;
+      // Tint cracks green to show detection
+      img.data[i]   = aR * (1 - inCrack * 0.5);
+      img.data[i+1] = aG * (1 - inCrack * 0.3) + inCrack * 60;
+      img.data[i+2] = aB * (1 - inCrack * 0.5);
+      img.data[i+3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+
+    // Crack snapping with wrapped texture sampling
+    function snapToNearestCrack(geoCU, geoCV) {
+      const searchRadius = 8;
+      const step = 0.5 / searchRadius;
+      const searchExtent = searchRadius * step;
+      let bestScore = 1e10, bestU = geoCU, bestV = geoCV;
+      for (let dr = -searchRadius; dr <= searchRadius; dr++) {
+        for (let dc = -searchRadius; dc <= searchRadius; dc++) {
+          const su = geoCU + dc * step, sv = geoCV + dr * step;
+          const sx2 = ((Math.floor(su * HS) % HS) + HS) % HS;
+          const sy2 = ((Math.floor(sv * HS) % HS) + HS) % HS;
+          const idx2 = sy2 * HS + sx2;
+          const depth2 = blur[idx2] - height[idx2];
+          const inCr = smoothstep(0.01, 0.09, depth2);
+          const isStone = inCr < 0.5 ? 1.0 : 0.0;
+          const dist = Math.hypot(su - geoCU, sv - geoCV) / Math.max(searchExtent, 0.0001);
+          const score = isStone * 1000.0 + dist;
+          if (score < bestScore) { bestScore = score; bestU = su; bestV = sv; }
+        }
+      }
+      return { u: bestU, v: bestV };
+    }
+
+    // Snap this tile's center
+    const center = snapToNearestCrack(0.5, 0.5);
+    const snapX = center.u * S, snapY = center.v * S;
+    const gcx = S / 2, gcy = S / 2;
+
+    // Snap 4 neighbor centers (S, E, N, W) — placed 1 tile-width away
+    const neighborGeo = [
+      { u: 0.5, v: 1.5 },   // S
+      { u: 1.5, v: 0.5 },   // E
+      { u: 0.5, v: -0.5 },  // N
+      { u: -0.5, v: 0.5 },  // W
+    ];
+    const neighborSnapped = neighborGeo.map(g => snapToNearestCrack(g.u, g.v));
+    const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e'];
+    const edgeLabels = ['S', 'E', 'N', 'W'];
+
+    // Corridor wavefront solver (matches GPU wavefront relaxation)
+    const ECW = 72, ECH = 28;
+    const NBRS = [[0,-1],[1,0],[0,1],[-1,0],[1,-1],[1,1],[-1,1],[-1,-1]];
+    const NLEN = [1,1,1,1,Math.SQRT2,Math.SQRT2,Math.SQRT2,Math.SQRT2];
+
+    function getCrackCost(u, v) {
+      const sx = ((Math.floor(u * HS) % HS) + HS) % HS;
+      const sy = ((Math.floor(v * HS) % HS) + HS) % HS;
+      const depth = blur[sy * HS + sx] - height[sy * HS + sx];
+      const inCrack = smoothstep(0.01, 0.09, depth);
+      return inCrack * 1.0 + (1.0 - inCrack) * 16.0;
+    }
+
+    function solveCorridor(cA, cB) {
+      const du = cB.u - cA.u, dv = cB.v - cA.v;
+      const len = Math.sqrt(du * du + dv * dv);
+      if (len < 0.001) return [];
+      const tx = du / len, ty = dv / len, nx = -ty, ny = tx;
+      const corridorPadUV = 16 / HS;
+      const halfW = Math.max(corridorPadUV, 2 / HS);
+      const pad = corridorPadUV;
+
+      const cost = new Float32Array(ECW * ECH);
+      const dist = new Float32Array(ECW * ECH).fill(1e10);
+      const pred = new Int32Array(ECW * ECH).fill(-1);
+      const cellUV = new Float32Array(ECW * ECH * 2);
+
+      for (let cy = 0; cy < ECH; cy++) for (let cx = 0; cx < ECW; cx++) {
+        const s = cx / (ECW - 1);
+        const t = (cy / (ECH - 1) - 0.5) * 2;
+        const u = cA.u + tx * (s * (len + 2 * pad) - pad) + nx * t * halfW;
+        const v = cA.v + ty * (s * (len + 2 * pad) - pad) + ny * t * halfW;
+        const ci = cy * ECW + cx;
+        cost[ci] = getCrackCost(u, v);
+        cellUV[ci * 2] = u;
+        cellUV[ci * 2 + 1] = v;
+      }
+
+      const srcFx = pad / (len + 2 * pad) * (ECW - 1);
+      const srcX = Math.round(srcFx), srcY = Math.floor(ECH / 2);
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const sx = srcX + dx, sy = srcY + dy;
+        if (sx >= 0 && sx < ECW && sy >= 0 && sy < ECH) {
+          const d = Math.sqrt(dx * dx + dy * dy) * cost[sy * ECW + sx];
+          dist[sy * ECW + sx] = d;
+          pred[sy * ECW + sx] = sy * ECW + sx;
+        }
+      }
+
+      const sinkFx = (len + pad) / (len + 2 * pad) * (ECW - 1);
+      const sinkX = Math.round(sinkFx), sinkY = Math.floor(ECH / 2);
+
+      for (let pass = 0; pass < 50; pass++) {
+        let changed = false;
+        for (let y = 0; y < ECH; y++) for (let x = 0; x < ECW; x++) {
+          const idx = y * ECW + x;
+          const sc = cost[idx];
+          for (let n = 0; n < 8; n++) {
+            const bx = x + NBRS[n][0], by = y + NBRS[n][1];
+            if (bx < 0 || bx >= ECW || by < 0 || by >= ECH) continue;
+            const nIdx = by * ECW + bx;
+            const ec = NLEN[n] * 0.5 * (sc + cost[nIdx]);
+            const cand = dist[nIdx] + ec;
+            if (cand < dist[idx] - 0.001) {
+              dist[idx] = cand;
+              pred[idx] = nIdx;
+              changed = true;
+            }
+          }
+        }
+        if (!changed) break;
+      }
+
+      let bestIdx = sinkY * ECW + sinkX, bestD = dist[bestIdx];
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const sx = sinkX + dx, sy = sinkY + dy;
+        if (sx >= 0 && sx < ECW && sy >= 0 && sy < ECH) {
+          const idx = sy * ECW + sx;
+          if (dist[idx] < bestD) { bestD = dist[idx]; bestIdx = idx; }
+        }
+      }
+      const path = [];
+      let cur = bestIdx;
+      for (let i = 0; i < ECW * ECH; i++) {
+        path.push({ px: cellUV[cur * 2] * S, py: cellUV[cur * 2 + 1] * S });
+        const p = pred[cur];
+        if (p < 0 || p === cur) break;
+        cur = p;
+      }
+      path.reverse();
+      return path;
+    }
+
+    const paths = neighborSnapped.map(n =>
+      solveCorridor({ u: center.u, v: center.v }, { u: n.u, v: n.v })
+    );
+
+    for (let e = 0; e < 4; e++) {
+      ctx.beginPath();
+      for (let p = 0; p < paths[e].length; p++) {
+        const pt = paths[e][p];
+        if (p === 0) ctx.moveTo(pt.px, pt.py); else ctx.lineTo(pt.px, pt.py);
+      }
+      ctx.strokeStyle = edgeColors[e]; ctx.lineWidth = 2.5; ctx.globalAlpha = 0.8;
+      ctx.stroke(); ctx.globalAlpha = 1;
+
+      // Edge label where path exits canvas
+      const last = paths[e][paths[e].length - 1];
+      const labelPt = paths[e][Math.min(paths[e].length - 1, Math.max(0, paths[e].length - 8))];
+      const lx = Math.max(12, Math.min(S - 12, last.px));
+      const ly = Math.max(12, Math.min(S - 12, last.py));
+      ctx.fillStyle = edgeColors[e]; ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(edgeLabels[e], lx, ly);
+    }
+
+    // Dashed arrow from geometric to snapped center
+    if (Math.hypot(snapX - gcx, snapY - gcy) > 2) {
+      ctx.beginPath(); ctx.moveTo(gcx, gcy); ctx.lineTo(snapX, snapY);
+      ctx.strokeStyle = '#ffffffa0'; ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]);
+    }
+
+    // Geometric center (red)
+    ctx.beginPath(); ctx.arc(gcx, gcy, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#f8514990'; ctx.fill();
+    ctx.strokeStyle = '#f85149'; ctx.lineWidth = 2; ctx.stroke();
+
+    // Snapped center (green)
+    ctx.beginPath(); ctx.arc(snapX, snapY, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#3fb95090'; ctx.fill();
+    ctx.strokeStyle = '#3fb950'; ctx.lineWidth = 2; ctx.stroke();
+
+    ctx.strokeStyle = '#30363d'; ctx.lineWidth = 2;
+    ctx.strokeRect(0, 0, S, S);
+  }
+
+  drawLeft();
+  drawRight();
 };
 
 function smoothstep(e0, e1, x) {
@@ -973,6 +1230,9 @@ slideInits[4] = function initSurface() {
   const W = cv.width, H = cv.height;
   const cornerState = [0, 1, 1, 0]; // BL, BR, TR, TL: 0=grass, 1=stone
 
+  const TS = 128;
+  const stoneAlb = generateStoneAlbedo(TS, TS, 42);
+
   function draw() {
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = '#0a1628'; ctx.fillRect(0, 0, W, H);
@@ -987,17 +1247,49 @@ slideInits[4] = function initSurface() {
     ctx.closePath();
 
     // Fill with grass/stone blend
+    // UV: u=0 left, u=1 right, v=0 bottom, v=1 top
+    // Corners: BL(0,0) BR(1,0) TR(1,1) TL(0,1)
+    const bits = cornerState[0] | (cornerState[1] << 1) | (cornerState[2] << 2) | (cornerState[3] << 3);
     const img = ctx.createImageData(W, H);
     for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
       const u = (px - margin) / tw, v = 1 - (py - margin) / th;
       if (u < -0.05 || u > 1.05 || v < -0.05 || v > 1.05) continue;
-      const s0 = cornerState[0] * (1 - u) * (1 - v) + cornerState[1] * u * (1 - v) +
-                  cornerState[2] * u * v + cornerState[3] * (1 - u) * v;
-      const stone = smoothstep(0.3, 0.7, s0);
+      let s0;
+      switch (bits) {
+        case 0:  s0 = 0; break;
+        case 15: s0 = 1; break;
+        // 1 stone corner
+        case 1:  s0 = 1 - (u + v) / 2; break;       // BL
+        case 2:  s0 = (u + (1 - v)) / 2; break;      // BR
+        case 4:  s0 = (u + v) / 2; break;             // TR
+        case 8:  s0 = ((1 - u) + v) / 2; break;       // TL
+        // 2 adjacent
+        case 3:  s0 = 1 - v; break;                   // BL+BR (bottom)
+        case 6:  s0 = u; break;                        // BR+TR (right)
+        case 12: s0 = v; break;                        // TL+TR (top)
+        case 9:  s0 = 1 - u; break;                    // BL+TL (left)
+        // 2 diagonal — bilinear
+        case 5:  s0 = (1-u)*(1-v) + u*v; break;       // BL+TR
+        case 10: s0 = u*(1-v) + (1-u)*v; break;       // BR+TL
+        // 3 stone (1 grass) — straight diagonal centered on rect diagonal
+        case 14: s0 = (u + v) / 2; break;             // BL grass
+        case 13: s0 = ((1 - u) + v) / 2; break;       // BR grass
+        case 11: s0 = 1 - (u + v) / 2; break;         // TR grass
+        case 7:  s0 = (u + (1 - v)) / 2; break;       // TL grass
+        default: s0 = 0.5;
+      }
+      const stone = smoothstep(0.35, 0.65, s0);
+      const su = Math.floor(Math.max(0, Math.min(0.999, u)) * TS);
+      const sv = Math.floor(Math.max(0, Math.min(0.999, 1 - v)) * TS);
+      const ai = (sv * TS + su) * 3;
+      const stR = texturesReady ? stoneAlb[ai] : 150, stG = texturesReady ? stoneAlb[ai+1] : 140, stB = texturesReady ? stoneAlb[ai+2] : 130;
+      const gR = 55 + fbm(u * 8, v * 8, 2, 42) * 30;
+      const gG = 120 + fbm(u * 8, v * 8, 2, 43) * 40;
+      const gB = 30 + fbm(u * 8, v * 8, 2, 44) * 20;
       const i = (py * W + px) * 4;
-      img.data[i] = stone * 150 + (1 - stone) * 55;
-      img.data[i + 1] = stone * 140 + (1 - stone) * 130;
-      img.data[i + 2] = stone * 130 + (1 - stone) * 35;
+      img.data[i] = stone * stR + (1 - stone) * gR;
+      img.data[i + 1] = stone * stG + (1 - stone) * gG;
+      img.data[i + 2] = stone * stB + (1 - stone) * gB;
       img.data[i + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
@@ -1041,7 +1333,6 @@ slideInits[4] = function initSurface() {
     }
 
     // Surface case label
-    const bits = cornerState[0] | (cornerState[1] << 1) | (cornerState[2] << 2) | (cornerState[3] << 3);
     ctx.fillStyle = '#58a6ff'; ctx.font = 'bold 16px monospace';
     ctx.textAlign = 'center';
     ctx.fillText(`SurfaceCase: ${bits.toString(2).padStart(4, '0')} (${bits})`, W / 2, 30);
@@ -1117,9 +1408,9 @@ slideInits[5] = function initCracks() {
       const idx = sy * SIZE + sx;
       const cr = crackVis[idx];
       const ai = idx * 3;
-      const aR = albedoC[ai] || (height[idx] * 255);
-      const aG = albedoC[ai+1] || (height[idx] * 255);
-      const aB = albedoC[ai+2] || (height[idx] * 255);
+      const aR = texturesReady ? albedoC[ai] : (height[idx] * 255);
+      const aG = texturesReady ? albedoC[ai+1] : (height[idx] * 255);
+      const aB = texturesReady ? albedoC[ai+2] : (height[idx] * 255);
       const i = (py * CSIZE + px) * 4;
       crImg.data[i] = aR * (1 - cr * 0.7) + cr * 30;
       crImg.data[i+1] = aG * (1 - cr * 0.5) + cr * 140;
@@ -1144,18 +1435,59 @@ slideInits[6] = function initCenters() {
   const ctx = cv.getContext('2d');
   const W = cv.width, H = cv.height;
   const SIZE = 128;
+  const SEARCH_RADIUS = 8;
+
   let seed = 42;
+  let height, albedo, blurred;
+  let bgCache = null;
 
-  function draw() {
+  // 2x2 tile grid: 3x3 vertices, center vertex is draggable
+  const pad = 40;
+  const baseVerts = [
+    { x: pad, y: pad }, { x: W/2, y: pad }, { x: W - pad, y: pad },
+    { x: pad, y: H/2 }, { x: W/2, y: H/2 }, { x: W - pad, y: H/2 },
+    { x: pad, y: H - pad }, { x: W/2, y: H - pad }, { x: W - pad, y: H - pad }
+  ];
+  function vi(gx, gy) { return gy * 3 + gx; }
+
+  let verts = baseVerts.map(v => ({ x: v.x, y: v.y }));
+  // Jitter non-corner vertices
+  function jitterVerts() {
+    verts = baseVerts.map((v, i) => {
+      const gx = i % 3, gy = Math.floor(i / 3);
+      const isCorner = (gx === 0 || gx === 2) && (gy === 0 || gy === 2);
+      if (isCorner) return { x: v.x, y: v.y };
+      const jx = (hashXY(gx, gy, seed + 99) - 0.5) * (W / 3) * 0.5;
+      const jy = (hashXY(gx + 7, gy + 7, seed + 99) - 0.5) * (H / 3) * 0.5;
+      return { x: v.x + jx, y: v.y + jy };
+    });
+  }
+
+  // 4 tiles: TL(0,0), TR(1,0), BL(0,1), BR(1,1)
+  function getTiles() {
+    const tiles = [];
+    for (let ty = 0; ty < 2; ty++) for (let tx = 0; tx < 2; tx++) {
+      const tl = verts[vi(tx, ty)], tr = verts[vi(tx+1, ty)];
+      const bl = verts[vi(tx, ty+1)], br = verts[vi(tx+1, ty+1)];
+      const cx = (tl.x + tr.x + bl.x + br.x) / 4;
+      const cy = (tl.y + tr.y + bl.y + br.y) / 4;
+      const edgeAvg = (Math.hypot(br.x-bl.x, br.y-bl.y) + Math.hypot(tr.x-br.x, tr.y-br.y)
+                      + Math.hypot(tl.x-tr.x, tl.y-tr.y) + Math.hypot(bl.x-tl.x, bl.y-tl.y)) / 4;
+      tiles.push({ corners: [bl, br, tr, tl], center: { x: cx, y: cy }, edgeAvg });
+    }
+    return tiles;
+  }
+
+  function regenTexture() {
     seed = Math.floor(Math.random() * 10000);
-    const height = generateStoneHeight(SIZE, SIZE, seed);
-    const albedo = generateStoneAlbedo(SIZE, SIZE, seed);
-    const radius = parseInt(document.getElementById('sl-search-rad').value);
-    document.getElementById('v-search-rad').textContent = radius;
+    jitterVerts();
+    height = generateStoneHeight(SIZE, SIZE, seed);
+    albedo = generateStoneAlbedo(SIZE, SIZE, seed);
+    blurred = boxBlur(height, SIZE, SIZE, 4);
+    bgCache = null;
+  }
 
-    const blurred = boxBlur(height, SIZE, SIZE, 4);
-
-    // Draw background: stone texture with crack overlay
+  function renderBg() {
     const img = ctx.createImageData(W, H);
     for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
       const u = px / W, v = py / H;
@@ -1165,73 +1497,201 @@ slideInits[6] = function initCenters() {
       const depth = bv - hv;
       const inCrack = smoothstep(0.02, 0.1, depth);
       const ai = idx * 3;
-      const aR = albedo[ai] || (hv * 150), aG = albedo[ai+1] || (hv * 140), aB = albedo[ai+2] || (hv * 130);
+      const aR = texturesReady ? albedo[ai] : (hv * 150);
+      const aG = texturesReady ? albedo[ai+1] : (hv * 140);
+      const aB = texturesReady ? albedo[ai+2] : (hv * 130);
       const i = (py * W + px) * 4;
       img.data[i] = aR * (1 - inCrack * 0.3);
-      img.data[i + 1] = aG * (1 - inCrack * 0.2) + inCrack * 40;
-      img.data[i + 2] = aB * (1 - inCrack * 0.3) + inCrack * 20;
-      img.data[i + 3] = 255;
+      img.data[i+1] = aG * (1 - inCrack * 0.2) + inCrack * 40;
+      img.data[i+2] = aB * (1 - inCrack * 0.3) + inCrack * 20;
+      img.data[i+3] = 255;
     }
-    ctx.putImageData(img, 0, 0);
+    bgCache = img;
+  }
 
-    // Simulate 4 tile centers
-    const tiles = [
-      { gx: 0.25, gy: 0.25 }, { gx: 0.75, gy: 0.25 },
-      { gx: 0.25, gy: 0.75 }, { gx: 0.75, gy: 0.75 }
-    ];
+  // Two-tier crack scoring (matches crack_find_centers.glsl)
+  function crackScore(su, sv, geoCU, geoCV, searchExtent) {
+    const sx = Math.max(0, Math.min(SIZE-1, Math.floor(su * SIZE)));
+    const sy = Math.max(0, Math.min(SIZE-1, Math.floor(sv * SIZE)));
+    const idx = sy * SIZE + sx;
+    const depth = blurred[idx] - height[idx];
+    const inCrack = smoothstep(0.02, 0.1, depth);
+    const isStone = inCrack < 0.5 ? 1.0 : 0.0;
+    const dist = Math.hypot(su - geoCU, sv - geoCV) / Math.max(searchExtent, 0.0001);
+    return { score: isStone * 1000.0 + dist, inCrack };
+  }
 
+  function snapCenter(tile) {
+    const radius = parseInt(document.getElementById('sl-search-rad').value);
+    const geoCU = tile.center.x / W, geoCV = tile.center.y / H;
+    const edgeAvgUV = tile.edgeAvg / W;
+    const step = edgeAvgUV * 0.5 / 8;
+    const searchExtent = radius * step;
+
+    let bestScore = 1e10, bestU = geoCU, bestV = geoCV;
+    const searchCells = [];
+
+    for (let dr = -radius; dr <= radius; dr++) for (let dc = -radius; dc <= radius; dc++) {
+      const su = geoCU + dc * step, sv = geoCV + dr * step;
+      if (su < 0 || su > 1 || sv < 0 || sv > 1) continue;
+      const { score, inCrack } = crackScore(su, sv, geoCU, geoCV, searchExtent);
+      searchCells.push({ px: su * W, py: sv * H, inCrack, score, isBest: false, row: dr });
+      if (score < bestScore) { bestScore = score; bestU = su; bestV = sv; }
+    }
+    // Mark best cell
+    for (const c of searchCells) {
+      if (Math.abs(c.px - bestU * W) < 1 && Math.abs(c.py - bestV * H) < 1) c.isBest = true;
+    }
+    return { snapped: { x: bestU * W, y: bestV * H }, searchCells, step, radius };
+  }
+
+  function draw() {
+    if (!bgCache) renderBg();
+    ctx.putImageData(bgCache, 0, 0);
+
+    const tiles = getTiles();
+
+    // Tile outlines
     for (const tile of tiles) {
-      const gcx = tile.gx * W, gcy = tile.gy * H;
-      const step = W * 0.5 / SIZE;
+      ctx.beginPath();
+      ctx.moveTo(tile.corners[0].x, tile.corners[0].y);
+      for (let i = 1; i < 4; i++) ctx.lineTo(tile.corners[i].x, tile.corners[i].y);
+      ctx.closePath();
+      ctx.strokeStyle = '#ffffffa0'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
 
-      let bestScore = 1e10, bestX = gcx, bestY = gcy;
-      for (let dr = -radius; dr <= radius; dr++) for (let dc = -radius; dc <= radius; dc++) {
-        const sx = Math.floor(tile.gx * SIZE + dc * 0.5);
-        const sy = Math.floor(tile.gy * SIZE + dr * 0.5);
-        if (sx < 0 || sx >= SIZE || sy < 0 || sy >= SIZE) continue;
-        const idx = sy * SIZE + sx;
-        const hv = height[idx], bv = blurred[idx];
-        const depth = bv - hv;
-        const inCrack = smoothstep(0.02, 0.1, depth);
-        const isStone = inCrack < 0.5 ? 1 : 0;
-        const dist = Math.sqrt(dc * dc + dr * dr) / radius;
-        const score = isStone * 1000 + dist;
-        if (score < bestScore) {
-          bestScore = score;
-          bestX = sx / SIZE * W; bestY = sy / SIZE * H;
-        }
+    // For each tile: run snapping and draw
+    for (const tile of tiles) {
+      const result = snapCenter(tile);
+      const gcx = tile.center.x, gcy = tile.center.y;
+
+      // Row bands (each row = one GPU thread)
+      const stepPx = result.step * W;
+      const halfStep = stepPx * 0.5;
+      const radius = result.radius;
+      for (let dr = -radius; dr <= radius; dr++) {
+        const bandY = gcy + dr * stepPx;
+        const bandL = gcx - radius * stepPx - halfStep;
+        const bandW = (2 * radius + 1) * stepPx;
+        ctx.globalAlpha = (dr % 2 === 0) ? 0.08 : 0.04;
+        ctx.fillStyle = '#58a6ff';
+        ctx.fillRect(bandL, bandY - halfStep, bandW, stepPx);
+      }
+      ctx.globalAlpha = 1;
+
+      // Search grid cells
+      const cellSize = Math.max(2, stepPx * 0.4);
+      for (const c of result.searchCells) {
+        if (c.isBest) continue;
+        ctx.globalAlpha = c.inCrack > 0.5 ? 0.6 : 0.25;
+        ctx.fillStyle = c.inCrack > 0.5 ? '#3fb950' : '#8b949e';
+        ctx.fillRect(c.px - cellSize, c.py - cellSize, cellSize * 2, cellSize * 2);
+      }
+      // Best cell drawn last, on top
+      for (const c of result.searchCells) {
+        if (!c.isBest) continue;
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(c.px - cellSize * 1.5, c.py - cellSize * 1.5, cellSize * 3, cellSize * 3);
+        ctx.fillStyle = '#3fb950';
+        ctx.fillRect(c.px - cellSize, c.py - cellSize, cellSize * 2, cellSize * 2);
+      }
+      ctx.globalAlpha = 1;
+
+      // Arrow from geometric to snapped
+      const dx = result.snapped.x - gcx, dy = result.snapped.y - gcy;
+      if (Math.hypot(dx, dy) > 2) {
+        ctx.beginPath(); ctx.moveTo(gcx, gcy); ctx.lineTo(result.snapped.x, result.snapped.y);
+        ctx.strokeStyle = '#ffffff60'; ctx.lineWidth = 1.5; ctx.setLineDash([3,3]); ctx.stroke();
+        ctx.setLineDash([]);
       }
 
-      // Search area
-      ctx.strokeStyle = '#ffffff20';
-      ctx.strokeRect(gcx - radius * step, gcy - radius * step, radius * 2 * step, radius * 2 * step);
-
       // Geometric center (red)
-      ctx.beginPath(); ctx.arc(gcx, gcy, 6, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(gcx, gcy, 5, 0, Math.PI * 2);
       ctx.fillStyle = '#f8514990'; ctx.fill();
       ctx.strokeStyle = '#f85149'; ctx.lineWidth = 2; ctx.stroke();
 
-      // Arrow
-      ctx.beginPath(); ctx.moveTo(gcx, gcy); ctx.lineTo(bestX, bestY);
-      ctx.strokeStyle = '#ffffff60'; ctx.lineWidth = 1; ctx.setLineDash([3,3]); ctx.stroke();
-      ctx.setLineDash([]);
-
       // Snapped center (green)
-      ctx.beginPath(); ctx.arc(bestX, bestY, 6, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(result.snapped.x, result.snapped.y, 5, 0, Math.PI * 2);
       ctx.fillStyle = '#3fb95090'; ctx.fill();
       ctx.strokeStyle = '#3fb950'; ctx.lineWidth = 2; ctx.stroke();
     }
 
+    // Draggable vertex indicator
+    const cv4 = verts[vi(1, 1)];
+    ctx.beginPath(); ctx.arc(cv4.x, cv4.y, 8, 0, Math.PI * 2);
+    ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath(); ctx.arc(cv4.x, cv4.y, 2, 0, Math.PI * 2);
+    ctx.fillStyle = '#58a6ff'; ctx.fill();
+
     // Legend
-    ctx.fillStyle = '#f85149'; ctx.beginPath(); ctx.arc(15, 15, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#8b949e'; ctx.font = '12px sans-serif'; ctx.textAlign = 'left';
-    ctx.fillText('Geometric center', 25, 19);
-    ctx.fillStyle = '#3fb950'; ctx.beginPath(); ctx.arc(15, 35, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#8b949e'; ctx.fillText('Crack-snapped center', 25, 39);
+    const lx = 10, ly = 8, lw = 170, lh = 52, lr = 6;
+    ctx.globalAlpha = 0.75;
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    ctx.moveTo(lx + lr, ly); ctx.lineTo(lx + lw - lr, ly); ctx.quadraticCurveTo(lx + lw, ly, lx + lw, ly + lr);
+    ctx.lineTo(lx + lw, ly + lh - lr); ctx.quadraticCurveTo(lx + lw, ly + lh, lx + lw - lr, ly + lh);
+    ctx.lineTo(lx + lr, ly + lh); ctx.quadraticCurveTo(lx, ly + lh, lx, ly + lh - lr);
+    ctx.lineTo(lx, ly + lr); ctx.quadraticCurveTo(lx, ly, lx + lr, ly);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#f85149'; ctx.beginPath(); ctx.arc(lx + 12, ly + 16, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText('Geometric center', lx + 22, ly + 20);
+    ctx.fillStyle = '#3fb950'; ctx.beginPath(); ctx.arc(lx + 12, ly + 34, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.fillText('Crack-snapped center', lx + 22, ly + 38);
   }
 
+  // Drag interaction for center vertex
+  let dragging = false;
+  cv.onmousedown = (e) => {
+    const rect = cv.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * (W / rect.width);
+    const my = (e.clientY - rect.top) * (H / rect.height);
+    const cv4 = verts[vi(1, 1)];
+    if (Math.hypot(mx - cv4.x, my - cv4.y) < 15) {
+      dragging = true;
+      e.preventDefault();
+    }
+  };
+  function cross2d(ax, ay, bx, by) { return ax * by - ay * bx; }
+
+  function constrainCenter(mx, my) {
+    const margin = 12;
+    const neighbors = [verts[vi(1,0)], verts[vi(2,1)], verts[vi(1,2)], verts[vi(0,1)]];
+    let cx = mx, cy = my;
+    for (let i = 0; i < 4; i++) {
+      const a = neighbors[i], b = neighbors[(i + 1) % 4];
+      const ex = b.x - a.x, ey = b.y - a.y;
+      const len = Math.hypot(ex, ey);
+      if (len < 0.001) continue;
+      const nx = -ey / len, ny = ex / len;
+      const inward = cross2d(ex, ey, W/2 - a.x, H/2 - a.y) > 0 ? 1 : -1;
+      const dist = ((cx - a.x) * nx + (cy - a.y) * ny) * inward;
+      if (dist < margin) {
+        cx += nx * inward * (margin - dist);
+        cy += ny * inward * (margin - dist);
+      }
+    }
+    return { x: cx, y: cy };
+  }
+
+  cv.onmousemove = (e) => {
+    if (!dragging) return;
+    const rect = cv.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * (W / rect.width);
+    const my = (e.clientY - rect.top) * (H / rect.height);
+    verts[vi(1, 1)] = constrainCenter(mx, my);
+    bgCache = null;
+    draw();
+  };
+  cv.onmouseup = () => { dragging = false; };
+  cv.onmouseleave = () => { dragging = false; };
+
+  regenTexture();
   draw();
-  document.getElementById('btn-centers-regen').onclick = draw;
+
+  document.getElementById('btn-centers-regen').onclick = () => { regenTexture(); draw(); };
   document.getElementById('sl-search-rad').oninput = () => {
     document.getElementById('v-search-rad').textContent = document.getElementById('sl-search-rad').value;
     draw();
@@ -1247,190 +1707,313 @@ slideInits[7] = function initPathfind() {
   const ctx = cv.getContext('2d');
   const W = cv.width, H = cv.height;
   const SIZE = 128;
-  const LANES = 64, STEPS = 65;
-  const MAX_STEP = 3;
 
   const height = generateStoneHeight(SIZE, SIZE, 77);
   const albedoPF = generateStoneAlbedo(SIZE, SIZE, 77);
   const blurred = boxBlur(height, SIZE, SIZE, 4);
 
-  const centerA = { u: 0.2, v: 0.5 }, centerB = { u: 0.8, v: 0.5 };
-  let costRatio = 20;
-  let dpState = null, animFrame = null, playing = false;
+  // Generate irregular quad grid (4x3 vertices -> 3x2 tiles)
+  const GCOLS = 4, GROWS = 3;
+  const TCOLS = GCOLS - 1, TROWS = GROWS - 1;
+  const margin = 20;
+  const gw = W - margin * 2, gh = H - margin * 2;
+  const verts = [];
+  const jitterSeed = 77;
+  for (let gy = 0; gy < GROWS; gy++) for (let gx = 0; gx < GCOLS; gx++) {
+    const bx = margin + gx / (GCOLS - 1) * gw;
+    const by = margin + gy / (GROWS - 1) * gh;
+    const onEdge = gx === 0 || gx === GCOLS - 1 || gy === 0 || gy === GROWS - 1;
+    const jx = onEdge ? 0 : (hashXY(gx, gy, jitterSeed) - 0.5) * gw / GCOLS * 0.6;
+    const jy = onEdge ? 0 : (hashXY(gx + 10, gy + 10, jitterSeed) - 0.5) * gh / GROWS * 0.6;
+    verts.push({ x: bx + jx, y: by + jy });
+  }
+  function vertIdx(gx, gy) { return gy * GCOLS + gx; }
+
+  const tiles = [];
+  for (let ty = 0; ty < TROWS; ty++) for (let tx = 0; tx < TCOLS; tx++) {
+    const bl = verts[vertIdx(tx, ty + 1)], br = verts[vertIdx(tx + 1, ty + 1)];
+    const tr = verts[vertIdx(tx + 1, ty)], tl = verts[vertIdx(tx, ty)];
+    tiles.push({ corners: [bl, br, tr, tl],
+      center: { x: (bl.x+br.x+tr.x+tl.x)/4, y: (bl.y+br.y+tr.y+tl.y)/4 }, col: tx, row: ty });
+  }
+
+  const edges = [];
+  for (let i = 0; i < tiles.length; i++) for (let j = i + 1; j < tiles.length; j++) {
+    const dc = Math.abs(tiles[i].col - tiles[j].col), dr = Math.abs(tiles[i].row - tiles[j].row);
+    if ((dc === 1 && dr === 0) || (dc === 0 && dr === 1)) edges.push({ tileA: i, tileB: j });
+  }
+
+  let activeEdge = 0, costRatio = 20;
+  let wfState = null, animFrame = null, playing = false;
+
+  function pointInQuad(px, py, corners) {
+    let allPos = true, allNeg = true;
+    for (let i = 0; i < 4; i++) {
+      const a = corners[i], b = corners[(i + 1) % 4];
+      const cross = (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x);
+      if (cross < 0) allPos = false;
+      if (cross > 0) allNeg = false;
+    }
+    return allPos || allNeg;
+  }
+
+  let bgCache = null;
+  function renderBg() {
+    const img = ctx.createImageData(W, H);
+    for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
+      const u = px / W, v = py / H;
+      const sx = Math.max(0, Math.min(SIZE-1, Math.floor(u*SIZE)));
+      const sy = Math.max(0, Math.min(SIZE-1, Math.floor(v*SIZE)));
+      const idx = sy * SIZE + sx;
+      const depth = blurred[idx] - height[idx];
+      const inCrack = smoothstep(0.02, 0.1, depth);
+      const ai = idx * 3;
+      const aR = texturesReady ? albedoPF[ai] : (height[idx]*150);
+      const aG = texturesReady ? albedoPF[ai+1] : (height[idx]*140);
+      const aB = texturesReady ? albedoPF[ai+2] : (height[idx]*130);
+      let inTile = false;
+      for (let ti = 0; ti < tiles.length; ti++) {
+        if (pointInQuad(px, py, tiles[ti].corners)) { inTile = true; break; }
+      }
+      const i = (py * W + px) * 4;
+      if (inTile) {
+        img.data[i] = aR * (1 - inCrack*0.6) * 0.7;
+        img.data[i+1] = aG * (1 - inCrack*0.3) * 0.7 + inCrack*60;
+        img.data[i+2] = aB * (1 - inCrack*0.6) * 0.7;
+      } else { img.data[i] = 10; img.data[i+1] = 14; img.data[i+2] = 20; }
+      img.data[i+3] = 255;
+    }
+    bgCache = img;
+  }
 
   function getCost(u, v) {
-    const sx = Math.max(0, Math.min(SIZE - 1, Math.floor(u * SIZE)));
-    const sy = Math.max(0, Math.min(SIZE - 1, Math.floor(v * SIZE)));
+    const sx = Math.max(0, Math.min(SIZE-1, Math.floor(u*SIZE)));
+    const sy = Math.max(0, Math.min(SIZE-1, Math.floor(v*SIZE)));
     const idx = sy * SIZE + sx;
     const depth = blurred[idx] - height[idx];
     const inCrack = smoothstep(0.02, 0.1, depth);
     return inCrack * 1 + (1 - inCrack) * costRatio;
   }
 
-  function initDP() {
-    const du = centerB.u - centerA.u, dv = centerB.v - centerA.v;
-    const len = Math.sqrt(du * du + dv * dv);
-    const tx = du / len, ty = dv / len;
-    const nx = -ty, ny = tx;
-    const halfWidth = 0.18;
+  // Wavefront corridor solver
+  const CW = 72, CH = 28;
+  const NBRS = [[0,-1],[1,0],[0,1],[-1,0],[1,-1],[1,1],[-1,1],[-1,-1]];
+  const NLEN = [1,1,1,1,Math.SQRT2,Math.SQRT2,Math.SQRT2,Math.SQRT2];
 
-    const dp = new Float32Array(STEPS * LANES).fill(1e10);
-    const trace = new Int32Array(STEPS * LANES);
-    const midlane = 32;
+  function buildCorridor() {
+    const e = edges[activeEdge];
+    const cA = { u: tiles[e.tileA].center.x / W, v: tiles[e.tileA].center.y / H };
+    const cB = { u: tiles[e.tileB].center.x / W, v: tiles[e.tileB].center.y / H };
+    const du = cB.u - cA.u, dv = cB.v - cA.v;
+    const len = Math.sqrt(du*du + dv*dv);
+    const tx = du/len, ty = dv/len, nx = -ty, ny = tx;
+    const halfW = len * 0.35;
+    const pad = len * 0.05;
 
-    dp[midlane] = 0;
-    for (let l = 0; l < LANES; l++) trace[l] = l;
+    const cost = new Float32Array(CW * CH);
+    const dist = new Float32Array(CW * CH).fill(1e10);
+    const pred = new Int32Array(CW * CH).fill(-1);
+    const cellPx = new Float32Array(CW * CH * 2);
 
-    return { dp, trace, step: 0, tx, ty, nx, ny, len, halfWidth, midlane, path: null };
+    for (let cy = 0; cy < CH; cy++) for (let cx = 0; cx < CW; cx++) {
+      const s = cx / (CW - 1);
+      const t = (cy / (CH - 1) - 0.5) * 2;
+      const u = cA.u + tx * (s * (len + 2*pad) - pad) + nx * t * halfW;
+      const v = cA.v + ty * (s * (len + 2*pad) - pad) + ny * t * halfW;
+      const ci = cy * CW + cx;
+      cost[ci] = getCost(u, v);
+      cellPx[ci*2] = u * W;
+      cellPx[ci*2+1] = v * H;
+    }
+
+    // Seed source: center A maps to s≈pad/(len+2*pad), t=0
+    const srcFx = pad / (len + 2*pad) * (CW - 1);
+    const srcX = Math.round(srcFx), srcY = Math.floor(CH / 2);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const nx2 = srcX + dx, ny2 = srcY + dy;
+      if (nx2 >= 0 && nx2 < CW && ny2 >= 0 && ny2 < CH) {
+        const d = Math.sqrt(dx*dx + dy*dy) * cost[ny2*CW+nx2];
+        const idx = ny2 * CW + nx2;
+        dist[idx] = d; pred[idx] = idx;
+      }
+    }
+
+    // Sink: center B maps to s≈(len+pad)/(len+2*pad)
+    const sinkFx = (len + pad) / (len + 2*pad) * (CW - 1);
+    const sinkX = Math.round(sinkFx), sinkY = Math.floor(CH / 2);
+
+    return { cost, dist, pred, cellPx, cA, cB, len, tx, ty, nx, ny, halfW,
+             srcX, srcY, sinkX, sinkY, relaxPass: 0, maxDist: 0, path: null, sorted: null };
   }
 
-  function stepDP(state) {
-    if (state.step >= STEPS) return false;
-    const s = state.step;
-    const t = s / (STEPS - 1);
-
-    for (let lane = 0; lane < LANES; lane++) {
-      const perpOff = ((lane / (LANES - 1)) * 2 - 1) * state.halfWidth;
-      const u = centerA.u + state.tx * t * state.len + state.nx * perpOff;
-      const v = centerA.v + state.ty * t * state.len + state.ny * perpOff;
-      const cellCost = getCost(u, v) + Math.abs(lane - state.midlane) / LANES * 2;
-
-      if (s === 0) {
-        state.dp[s * LANES + lane] = (lane === state.midlane ? 0 : 1e10) + cellCost;
-        state.trace[s * LANES + lane] = lane;
-      } else {
-        let best = 1e10, bestFrom = lane;
-        for (let dr = 0; dr <= MAX_STEP; dr++) {
-          const penalty = dr * 0.5;
-          for (let sign = 1; sign >= -1; sign -= 2) {
-            if (dr === 0 && sign === -1) continue;
-            const from = lane + dr * sign;
-            if (from < 0 || from >= LANES) continue;
-            const c = state.dp[(s - 1) * LANES + from] + cellCost + penalty;
-            if (c < best) { best = c; bestFrom = from; }
-          }
+  function relaxPass(wf) {
+    let changed = false;
+    for (let y = 0; y < CH; y++) for (let x = 0; x < CW; x++) {
+      const idx = y * CW + x;
+      const selfCost = wf.cost[idx];
+      for (let n = 0; n < 8; n++) {
+        const bx = x + NBRS[n][0], by = y + NBRS[n][1];
+        if (bx < 0 || bx >= CW || by < 0 || by >= CH) continue;
+        if (n >= 4) {
+          const ax2 = x + NBRS[n][0], by2 = y + NBRS[n][1];
+          if (x + NBRS[n][0] < 0 || x + NBRS[n][0] >= CW) continue;
+          if (y + NBRS[n][1] < 0 || y + NBRS[n][1] >= CH) continue;
         }
-        state.dp[s * LANES + lane] = best;
-        state.trace[s * LANES + lane] = bestFrom;
+        const nIdx = by * CW + bx;
+        const ec = NLEN[n] * 0.5 * (selfCost + wf.cost[nIdx]);
+        const cand = wf.dist[nIdx] + ec;
+        if (cand < wf.dist[idx] - 0.001) {
+          wf.dist[idx] = cand;
+          wf.pred[idx] = nIdx;
+          changed = true;
+        }
       }
     }
-    state.step++;
-
-    if (state.step >= STEPS) {
-      state.path = new Int32Array(STEPS);
-      let cur = state.midlane;
-      for (let s2 = STEPS - 1; s2 >= 0; s2--) {
-        state.path[s2] = cur;
-        cur = state.trace[s2 * LANES + cur];
-      }
-    }
-    return true;
+    wf.relaxPass++;
+    return changed;
   }
 
-  function drawPath() {
-    // Background: stone texture tinted by crack cost
-    const img = ctx.createImageData(W, H);
-    for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
-      const u = px / W, v = py / H;
-      const sx = Math.max(0, Math.min(SIZE - 1, Math.floor(u * SIZE)));
-      const sy = Math.max(0, Math.min(SIZE - 1, Math.floor(v * SIZE)));
-      const idx = sy * SIZE + sx;
-      const depth = blurred[idx] - height[idx];
-      const inCrack = smoothstep(0.02, 0.1, depth);
-      const ai = idx * 3;
-      const aR = albedoPF[ai] || (height[idx] * 150), aG = albedoPF[ai+1] || (height[idx] * 140), aB = albedoPF[ai+2] || (height[idx] * 130);
-      // Tint cracks green to show cost field
-      const i = (py * W + px) * 4;
-      img.data[i] = aR * (1 - inCrack * 0.6) * 0.7;
-      img.data[i + 1] = aG * (1 - inCrack * 0.3) * 0.7 + inCrack * 60;
-      img.data[i + 2] = aB * (1 - inCrack * 0.6) * 0.7;
-      img.data[i + 3] = 255;
-    }
-    ctx.putImageData(img, 0, 0);
-
-    if (!dpState) return;
-
-    // Draw DP band
-    ctx.globalAlpha = 0.3;
-    for (let s = 0; s < Math.min(dpState.step, STEPS); s++) {
-      const t = s / (STEPS - 1);
-      for (let lane = 0; lane < LANES; lane++) {
-        const perpOff = ((lane / (LANES - 1)) * 2 - 1) * dpState.halfWidth;
-        const px = (centerA.u + dpState.tx * t * dpState.len + dpState.nx * perpOff) * W;
-        const py = (centerA.v + dpState.ty * t * dpState.len + dpState.ny * perpOff) * H;
-        const cost = dpState.dp[s * LANES + lane];
-        if (cost > 1e9) continue;
-        const maxCost = dpState.step * costRatio * 0.3;
-        const norm = Math.min(1, cost / maxCost);
-        ctx.fillStyle = `hsl(${(1 - norm) * 120}, 80%, ${40 + norm * 20}%)`;
-        ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
+  function solveAndSort(wf) {
+    for (let p = 0; p < 60; p++) { if (!relaxPass(wf)) break; }
+    // Find max reachable distance
+    let maxD = 0;
+    for (let i = 0; i < CW * CH; i++) { if (wf.dist[i] < 1e9 && wf.dist[i] > maxD) maxD = wf.dist[i]; }
+    wf.maxDist = maxD;
+    // Sort cells by distance for animation
+    const indices = [];
+    for (let i = 0; i < CW * CH; i++) { if (wf.dist[i] < 1e9) indices.push(i); }
+    indices.sort((a, b) => wf.dist[a] - wf.dist[b]);
+    wf.sorted = indices;
+    // Traceback
+    let bestIdx = wf.sinkY * CW + wf.sinkX, bestD = wf.dist[bestIdx];
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+      const nx2 = wf.sinkX + dx, ny2 = wf.sinkY + dy;
+      if (nx2 >= 0 && nx2 < CW && ny2 >= 0 && ny2 < CH) {
+        const idx = ny2 * CW + nx2;
+        if (wf.dist[idx] < bestD) { bestD = wf.dist[idx]; bestIdx = idx; }
       }
     }
-    ctx.globalAlpha = 1;
+    const path = [bestIdx];
+    let cur = bestIdx;
+    for (let i = 0; i < CW * CH; i++) {
+      const prev = wf.pred[cur];
+      if (prev < 0 || prev === cur) break;
+      path.push(prev); cur = prev;
+    }
+    path.reverse();
+    wf.path = path;
+  }
 
-    // Sweep line
-    if (dpState.step > 0 && dpState.step < STEPS) {
-      const t = (dpState.step - 1) / (STEPS - 1);
-      const sx = (centerA.u + dpState.tx * t * dpState.len) * W;
-      const sy = (centerA.v + dpState.ty * t * dpState.len) * H;
+  let revealCount = 0;
+
+  function draw() {
+    if (!bgCache) renderBg();
+    ctx.putImageData(bgCache, 0, 0);
+
+    // Tile outlines
+    const ae = edges[activeEdge];
+    for (let ti = 0; ti < tiles.length; ti++) {
+      const c = tiles[ti].corners;
+      const isActive = ti === ae.tileA || ti === ae.tileB;
       ctx.beginPath();
-      ctx.moveTo(sx + dpState.nx * dpState.halfWidth * W, sy + dpState.ny * dpState.halfWidth * H);
-      ctx.lineTo(sx - dpState.nx * dpState.halfWidth * W, sy - dpState.ny * dpState.halfWidth * H);
-      ctx.strokeStyle = '#ffffff80'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.moveTo(c[0].x, c[0].y);
+      for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y);
+      ctx.closePath();
+      ctx.strokeStyle = isActive ? '#58a6ff80' : '#ffffff25';
+      ctx.lineWidth = isActive ? 2 : 1;
+      ctx.stroke();
     }
 
-    // Path
-    if (dpState.path) {
-      ctx.beginPath();
-      for (let s = 0; s < STEPS; s++) {
-        const t = s / (STEPS - 1);
-        const lane = dpState.path[s];
-        const perpOff = ((lane / (LANES - 1)) * 2 - 1) * dpState.halfWidth;
-        const px = (centerA.u + dpState.tx * t * dpState.len + dpState.nx * perpOff) * W;
-        const py = (centerA.v + dpState.ty * t * dpState.len + dpState.ny * perpOff) * H;
-        if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    if (wfState && wfState.sorted) {
+      const cellSize = Math.max(2, Math.min(W / CW, H / CH) * 0.45);
+      const showCount = Math.min(revealCount, wfState.sorted.length);
+
+      // Draw revealed wavefront cells
+      for (let si = 0; si < showCount; si++) {
+        const idx = wfState.sorted[si];
+        const px = wfState.cellPx[idx*2], py = wfState.cellPx[idx*2+1];
+        const norm = wfState.maxDist > 0 ? Math.min(1, wfState.dist[idx] / wfState.maxDist) : 0;
+        const hue = (1 - norm) * 120;
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = `hsl(${hue}, 80%, ${35 + norm * 25}%)`;
+        ctx.fillRect(px - cellSize, py - cellSize, cellSize * 2, cellSize * 2);
       }
-      ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 3; ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      // Corridor outline
+      const wf = wfState;
+      ctx.beginPath();
+      ctx.moveTo(wf.cellPx[0], wf.cellPx[1]);
+      ctx.lineTo(wf.cellPx[(CW-1)*2], wf.cellPx[(CW-1)*2+1]);
+      ctx.lineTo(wf.cellPx[((CH-1)*CW+CW-1)*2], wf.cellPx[((CH-1)*CW+CW-1)*2+1]);
+      ctx.lineTo(wf.cellPx[(CH-1)*CW*2], wf.cellPx[(CH-1)*CW*2+1]);
+      ctx.closePath();
+      ctx.strokeStyle = '#ffffff30'; ctx.lineWidth = 1; ctx.stroke();
+
+      // Path (after full reveal)
+      if (revealCount >= wfState.sorted.length && wfState.path) {
+        ctx.beginPath();
+        for (let i = 0; i < wfState.path.length; i++) {
+          const idx = wfState.path[i];
+          const px = wfState.cellPx[idx*2], py = wfState.cellPx[idx*2+1];
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 3; ctx.stroke();
+      }
     }
 
-    // Centers
-    ctx.beginPath(); ctx.arc(centerA.u * W, centerA.v * H, 6, 0, Math.PI * 2);
-    ctx.fillStyle = '#3fb950'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
-    ctx.beginPath(); ctx.arc(centerB.u * W, centerB.v * H, 6, 0, Math.PI * 2);
-    ctx.fillStyle = '#3fb950'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    // Tile centers
+    for (let ti = 0; ti < tiles.length; ti++) {
+      const c = tiles[ti].center;
+      const isActive = ti === ae.tileA || ti === ae.tileB;
+      ctx.beginPath(); ctx.arc(c.x, c.y, isActive ? 6 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = isActive ? '#3fb950' : '#8b949e'; ctx.fill();
+      if (isActive) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }
+    }
 
     ctx.fillStyle = '#8b949e'; ctx.font = '11px monospace';
-    ctx.textAlign = 'left'; ctx.fillText(`Step: ${dpState.step}/${STEPS}`, 8, H - 8);
+    ctx.textAlign = 'left';
+    if (wfState && wfState.sorted) {
+      const pct = Math.min(100, Math.round(revealCount / wfState.sorted.length * 100));
+      ctx.fillText(`Wavefront: ${pct}%${pct >= 100 ? ' — traceback complete' : ''}`, 8, H - 8);
+    } else { ctx.fillText('Ready', 8, H - 8); }
+    ctx.textAlign = 'right';
+    ctx.fillText(`Edge ${activeEdge + 1}/${edges.length}`, W - 8, H - 8);
   }
 
   function reset() {
     playing = false;
     if (animFrame) cancelAnimationFrame(animFrame);
     costRatio = parseInt(document.getElementById('sl-cost-ratio').value);
-    dpState = initDP();
-    drawPath();
+    wfState = buildCorridor();
+    solveAndSort(wfState);
+    revealCount = 0;
+    draw();
   }
 
   function animate() {
     const speed = parseInt(document.getElementById('sl-path-speed').value);
-    for (let i = 0; i < speed; i++) {
-      if (!stepDP(dpState)) { playing = false; break; }
+    revealCount += speed * 8;
+    if (revealCount > wfState.sorted.length) {
+      revealCount = wfState.sorted.length + 1;
+      playing = false;
     }
-    drawPath();
+    draw();
     if (playing) animFrame = requestAnimationFrame(animate);
   }
 
   document.getElementById('btn-path-play').onclick = () => {
-    if (dpState && dpState.step >= STEPS) reset();
+    if (wfState && revealCount > wfState.sorted.length) reset();
     playing = !playing;
     if (playing) animate();
   };
-  document.getElementById('btn-path-step').onclick = () => {
-    playing = false;
-    if (!dpState || dpState.step >= STEPS) { dpState = initDP(); }
-    stepDP(dpState); drawPath();
-  };
   document.getElementById('btn-path-reset').onclick = reset;
+  document.getElementById('btn-path-edge').onclick = () => {
+    playing = false;
+    if (animFrame) cancelAnimationFrame(animFrame);
+    activeEdge = (activeEdge + 1) % edges.length;
+    reset();
+  };
   document.getElementById('sl-cost-ratio').oninput = () => {
     document.getElementById('v-cost-ratio').textContent = document.getElementById('sl-cost-ratio').value;
   };
@@ -1442,9 +2025,147 @@ slideInits[7] = function initPathfind() {
 };
 
 // ============================================================
-//  SLIDE 8: FLAP FOLDING DEMO
+//  SLIDE 8: SHARED EDGES DEMO
 // ============================================================
-slideInits[8] = function initFlaps() {
+slideInits[8] = function initSharedEdges() {
+
+  const cv = document.getElementById('cv-shared-edges');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+
+  const tileW = 160, tileH = 160, gap = 80;
+  const tileAx = (W - tileW * 2 - gap) / 2, tileAy = (H - tileH) / 2;
+  const tileBx = tileAx + tileW + gap, tileBy = tileAy;
+
+  const centerA = { x: tileAx + tileW / 2, y: tileAy + tileH / 2 };
+  const centerB = { x: tileBx + tileW / 2, y: tileBy + tileH / 2 };
+
+  let viewFromA = true;
+  let pathSeed = 42;
+
+  function genEdgePath(seed) {
+    const pts = [];
+    const N = 40;
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const wobble = Math.sin(t * Math.PI * 2.5 + seed * 1.7) * 12
+                    + Math.sin(t * Math.PI * 4.1 + seed * 0.9) * 6;
+      const x = centerA.x + (centerB.x - centerA.x) * t;
+      const y = centerA.y + (centerB.y - centerA.y) * t + wobble;
+      pts.push({ x, y });
+    }
+    return pts;
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0a1628'; ctx.fillRect(0, 0, W, H);
+
+    const path = genEdgePath(pathSeed);
+
+    // Tiles
+    ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 2;
+    ctx.strokeRect(tileAx, tileAy, tileW, tileH);
+    ctx.strokeRect(tileBx, tileBy, tileW, tileH);
+
+    // Tile labels
+    ctx.font = 'bold 16px monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = viewFromA ? '#58a6ff' : '#8b949e';
+    ctx.fillText('Tile A', centerA.x, tileAy - 12);
+    ctx.fillStyle = !viewFromA ? '#58a6ff' : '#8b949e';
+    ctx.fillText('Tile B', centerB.x, tileBy - 12);
+
+    // Active tile highlight
+    const ax = viewFromA ? tileAx : tileBx, ay = viewFromA ? tileAy : tileBy;
+    ctx.fillStyle = '#58a6ff10';
+    ctx.fillRect(ax, ay, tileW, tileH);
+
+    // Centers
+    for (const c of [centerA, centerB]) {
+      ctx.beginPath(); ctx.arc(c.x, c.y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff'; ctx.fill();
+    }
+
+    // Edge path
+    ctx.beginPath();
+    for (let i = 0; i < path.length; i++) {
+      if (i === 0) ctx.moveTo(path[i].x, path[i].y);
+      else ctx.lineTo(path[i].x, path[i].y);
+    }
+    ctx.strokeStyle = '#d29922'; ctx.lineWidth = 3; ctx.stroke();
+
+    // s parameter markers
+    const sLabels = 11;
+    for (let i = 0; i < sLabels; i++) {
+      const t = i / (sLabels - 1);
+      const dispT = viewFromA ? t : 1 - t;
+      const idx = Math.round(t * (path.length - 1));
+      const px = path[idx].x, py = path[idx].y;
+
+      if (i % 5 === 0) {
+        ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2);
+        ctx.fillStyle = dispT < 0.01 ? '#3fb950' : dispT > 0.99 ? '#f85149' : '#d29922';
+        ctx.fill();
+        ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+        ctx.fillStyle = '#e6edf3';
+        ctx.fillText(`s=${dispT.toFixed(1)}`, px, py - 12);
+      } else {
+        ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2);
+        ctx.fillStyle = '#d2992280'; ctx.fill();
+      }
+    }
+
+    // Normal arrow at midpoint
+    const mid = path[Math.floor(path.length / 2)];
+    const mPrev = path[Math.floor(path.length / 2) - 2];
+    const mNext = path[Math.floor(path.length / 2) + 2];
+    const tang = { x: mNext.x - mPrev.x, y: mNext.y - mPrev.y };
+    const tLen = Math.sqrt(tang.x ** 2 + tang.y ** 2);
+    const norm = viewFromA ? { x: -tang.y / tLen, y: tang.x / tLen } : { x: tang.y / tLen, y: -tang.x / tLen };
+
+    ctx.beginPath();
+    ctx.moveTo(mid.x, mid.y);
+    ctx.lineTo(mid.x + norm.x * 30, mid.y + norm.y * 30);
+    ctx.strokeStyle = '#bc8cff'; ctx.lineWidth = 2; ctx.stroke();
+    const arrowSize = 8;
+    const ax2 = mid.x + norm.x * 30, ay2 = mid.y + norm.y * 30;
+    ctx.beginPath();
+    ctx.moveTo(ax2, ay2);
+    ctx.lineTo(ax2 - norm.x * arrowSize + norm.y * arrowSize * 0.5, ay2 - norm.y * arrowSize - norm.x * arrowSize * 0.5);
+    ctx.lineTo(ax2 - norm.x * arrowSize - norm.y * arrowSize * 0.5, ay2 - norm.y * arrowSize + norm.x * arrowSize * 0.5);
+    ctx.closePath(); ctx.fillStyle = '#bc8cff'; ctx.fill();
+
+    ctx.font = '11px monospace'; ctx.textAlign = 'left';
+    ctx.fillStyle = '#bc8cff';
+    ctx.fillText('n (positive side)', ax2 + 6, ay2 + 4);
+
+    // Side labels
+    const sideY = mid.y + norm.y * 55;
+    ctx.font = 'bold 13px monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#3fb95080';
+    ctx.fillText('positive side', mid.x + norm.x * 55, sideY);
+    ctx.fillStyle = '#f8514980';
+    ctx.fillText('negative side', mid.x - norm.x * 55, mid.y - norm.y * 55);
+
+    // sref annotation
+    ctx.font = '12px monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#8b949e';
+    const srefVal = viewFromA ? '+1' : '-1';
+    ctx.fillText(`sref = ${srefVal}`, W / 2, H - 15);
+    ctx.fillText(viewFromA ? 's_local = s_param' : 's_local = 1 - s_param', W / 2, H - 32);
+  }
+
+  draw();
+
+  document.getElementById('btn-view-a').onclick = () => { viewFromA = true; draw(); };
+  document.getElementById('btn-view-b').onclick = () => { viewFromA = false; draw(); };
+  document.getElementById('btn-edge-regen').onclick = () => { pathSeed = Math.floor(Math.random() * 10000); draw(); };
+};
+
+// ============================================================
+//  SLIDE 9: SEQUENTIAL OVERWRITE DEMO
+// ============================================================
+slideInits[9] = function initSequentialOverwrite() {
 
   const cv = document.getElementById('cv-flaps');
   const ctx = cv.getContext('2d');
@@ -1457,26 +2178,27 @@ slideInits[8] = function initFlaps() {
   ];
   const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e']; // S, E, N, W
   const edgeNames = ['S (→BR)', 'E (→TR)', 'N (→TL)', 'W (→BL)'];
-  const sectorCorner = [1, 2, 3, 0]; // S→BR, E→TR, N→TL, W→BL
+  const sectorCorner = [1, 2, 3, 0];
 
   let paths = [];
   let showPaths = true;
-  let animStep = -1, animFrame = null;
+  let currentStep = -1;
 
   function genPaths() {
     paths = [];
+    const seed = Math.floor(Math.random() * 10000);
     for (let e = 0; e < 4; e++) {
       const pts = [];
       const N = 32;
       for (let i = 0; i <= N; i++) {
         const t = i / N;
         let base, perp;
-        if (e === 0) { base = { x: t, y: 0 }; perp = { x: 0, y: 1 }; }      // S
-        else if (e === 1) { base = { x: 1, y: t }; perp = { x: -1, y: 0 }; }  // E
-        else if (e === 2) { base = { x: 1 - t, y: 1 }; perp = { x: 0, y: -1 }; } // N
-        else { base = { x: 0, y: 1 - t }; perp = { x: 1, y: 0 }; }            // W
-        const wobble = Math.sin(t * Math.PI * 2 + hashXY(e, 0, 42) * 10) * 0.12
-                      + Math.sin(t * Math.PI * 3.7 + hashXY(e, 1, 42) * 10) * 0.06;
+        if (e === 0) { base = { x: t, y: 0 }; perp = { x: 0, y: 1 }; }
+        else if (e === 1) { base = { x: 1, y: t }; perp = { x: -1, y: 0 }; }
+        else if (e === 2) { base = { x: 1 - t, y: 1 }; perp = { x: 0, y: -1 }; }
+        else { base = { x: 0, y: 1 - t }; perp = { x: 1, y: 0 }; }
+        const wobble = Math.sin(t * Math.PI * 2 + hashXY(e, 0, seed) * 10) * 0.12
+                      + Math.sin(t * Math.PI * 3.7 + hashXY(e, 1, seed) * 10) * 0.06;
         pts.push({ x: base.x + perp.x * (0.5 + wobble), y: base.y + perp.y * (0.5 + wobble) });
       }
       paths.push(pts);
@@ -1498,14 +2220,33 @@ slideInits[8] = function initFlaps() {
     return bestSide;
   }
 
+  function sParamOfPath(pathIdx, px, py) {
+    const pts = paths[pathIdx];
+    let bestDist = Infinity, bestT = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const ax = pts[i].x, ay = pts[i].y, bx = pts[i + 1].x, by = pts[i + 1].y;
+      const dx = bx - ax, dy = by - ay;
+      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+      const cx = ax + t * dx, cy = ay + t * dy;
+      const dist = Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
+      if (dist < bestDist) { bestDist = dist; bestT = (i + t) / (pts.length - 1); }
+    }
+    return bestT;
+  }
+
   function classify(px, py, upToEdge) {
     const limit = upToEdge !== undefined ? upToEdge + 1 : 4;
     let assigned = 0;
-    const sides = [];
-    for (let i = 0; i < 4; i++) sides.push(sideOfPath(i, px, py));
-
+    const sides = [], sLocal = [];
+    for (let i = 0; i < 4; i++) {
+      sides.push(sideOfPath(i, px, py));
+      sLocal.push(sParamOfPath(i, px, py));
+    }
     for (let i = 1; i < limit; i++) {
       if (sides[i] <= 0) continue;
+      const newInRange = sLocal[i] > 0.0;
+      const curInRange = sLocal[assigned] > 0.0 && sides[assigned] > 0;
+      if (!newInRange && curInRange) continue;
       if (i === 3 && assigned === 0 && sides[0] > 0) continue;
       assigned = i;
     }
@@ -1519,7 +2260,6 @@ slideInits[8] = function initFlaps() {
     ctx.clearRect(0, 0, S, S);
     ctx.fillStyle = '#0a1628'; ctx.fillRect(0, 0, S, S);
 
-    // Classification
     const img = ctx.createImageData(S, S);
     for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
       const u = (px - margin) / tileS, v = (py - margin) / tileS;
@@ -1534,13 +2274,12 @@ slideInits[8] = function initFlaps() {
     }
     ctx.putImageData(img, 0, 0);
 
-    // Tile border
     ctx.strokeStyle = '#ffffff40'; ctx.lineWidth = 1;
     ctx.strokeRect(margin, margin, tileS, tileS);
 
-    // Edge paths
     if (showPaths) {
-      for (let e = 0; e < Math.min(paths.length, upToEdge !== undefined ? upToEdge + 1 : 4); e++) {
+      const limit = upToEdge !== undefined ? upToEdge + 1 : 4;
+      for (let e = 0; e < Math.min(paths.length, limit); e++) {
         ctx.beginPath();
         for (let i = 0; i < paths[e].length; i++) {
           const px = margin + paths[e][i].x * tileS, py = margin + paths[e][i].y * tileS;
@@ -1550,7 +2289,6 @@ slideInits[8] = function initFlaps() {
       }
     }
 
-    // Corner labels
     const cornerPos = [[margin + 15, S - margin - 10], [S - margin - 15, S - margin - 10],
                         [S - margin - 15, margin + 18], [margin + 15, margin + 18]];
     const cornerLabels = ['BL', 'BR', 'TR', 'TL'];
@@ -1559,7 +2297,6 @@ slideInits[8] = function initFlaps() {
       ctx.textAlign = 'center'; ctx.fillText(cornerLabels[i], cornerPos[i][0], cornerPos[i][1]);
     }
 
-    // Edge labels on outside
     if (showPaths) {
       const limit = upToEdge !== undefined ? upToEdge + 1 : 4;
       for (let e = 0; e < limit; e++) {
@@ -1570,6 +2307,13 @@ slideInits[8] = function initFlaps() {
         ctx.fillText(edgeNames[e], pos[e][0], pos[e][1]);
       }
     }
+
+    // Step indicator
+    if (upToEdge !== undefined) {
+      ctx.font = 'bold 14px monospace'; ctx.textAlign = 'left';
+      ctx.fillStyle = edgeColors[upToEdge];
+      ctx.fillText(`Processing: ${edgeNames[upToEdge]}`, margin, S - 5);
+    }
   }
 
   genPaths();
@@ -1579,11 +2323,12 @@ slideInits[8] = function initFlaps() {
   document.getElementById('btn-flap-animate').onclick = () => {
     if (animating) return;
     animating = true;
-    animStep = 0;
+    currentStep = 0;
     function step() {
-      draw(animStep);
-      if (animStep < 3) {
-        animStep++;
+      draw(currentStep);
+      document.getElementById('flap-step-label').textContent = `Edge ${currentStep + 1}/4: ${edgeNames[currentStep]}`;
+      if (currentStep < 3) {
+        currentStep++;
         setTimeout(step, 800);
       } else {
         animating = false;
@@ -1591,14 +2336,169 @@ slideInits[8] = function initFlaps() {
     }
     step();
   };
-  document.getElementById('btn-flap-regen').onclick = () => { genPaths(); draw(); };
-  document.getElementById('chk-flap-paths').onchange = (e) => { showPaths = e.target.checked; draw(); };
+  document.getElementById('btn-flap-step').onclick = () => {
+    if (animating) return;
+    currentStep = currentStep < 0 ? 0 : (currentStep + 1) % 4;
+    draw(currentStep);
+    document.getElementById('flap-step-label').textContent = `Edge ${currentStep + 1}/4: ${edgeNames[currentStep]}`;
+  };
+  document.getElementById('btn-flap-regen').onclick = () => { genPaths(); currentStep = -1; document.getElementById('flap-step-label').textContent = 'All edges'; draw(); };
+  document.getElementById('chk-flap-paths').onchange = (e) => { showPaths = e.target.checked; draw(currentStep >= 0 ? currentStep : undefined); };
 };
 
 // ============================================================
-//  SLIDE 9: MASK GENERATION DEMO
+//  SLIDE 10: DOMAIN GUARDS DEMO
 // ============================================================
-slideInits[9] = function initMask() {
+slideInits[10] = function initDomainGuards() {
+
+  const cv = document.getElementById('cv-guards');
+  const ctx = cv.getContext('2d');
+  const S = cv.width;
+  const cornerColors = [
+    [255, 150, 50],  // BL
+    [255, 220, 50],  // BR
+    [50, 220, 200],  // TR
+    [200, 120, 255]  // TL
+  ];
+  const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e'];
+  const sectorCorner = [1, 2, 3, 0];
+
+  let paths = [];
+  let useDomainGuard = true, useWrapGuard = true;
+
+  function genPaths() {
+    paths = [];
+    const seed = Math.floor(Math.random() * 10000);
+    for (let e = 0; e < 4; e++) {
+      const pts = [];
+      const N = 32;
+      for (let i = 0; i <= N; i++) {
+        const t = i / N;
+        let base, perp;
+        if (e === 0) { base = { x: t, y: 0 }; perp = { x: 0, y: 1 }; }
+        else if (e === 1) { base = { x: 1, y: t }; perp = { x: -1, y: 0 }; }
+        else if (e === 2) { base = { x: 1 - t, y: 1 }; perp = { x: 0, y: -1 }; }
+        else { base = { x: 0, y: 1 - t }; perp = { x: 1, y: 0 }; }
+        const wobble = Math.sin(t * Math.PI * 2 + hashXY(e, 0, seed) * 10) * 0.12
+                      + Math.sin(t * Math.PI * 3.7 + hashXY(e, 1, seed) * 10) * 0.06;
+        pts.push({ x: base.x + perp.x * (0.5 + wobble), y: base.y + perp.y * (0.5 + wobble) });
+      }
+      paths.push(pts);
+    }
+  }
+
+  function sideOfPath(pathIdx, px, py) {
+    const pts = paths[pathIdx];
+    let bestDist = Infinity, bestSide = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const ax = pts[i].x, ay = pts[i].y, bx = pts[i + 1].x, by = pts[i + 1].y;
+      const dx = bx - ax, dy = by - ay;
+      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+      const cx = ax + t * dx, cy = ay + t * dy;
+      const dist = Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
+      const side = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+      if (dist < bestDist) { bestDist = dist; bestSide = side; }
+    }
+    return bestSide;
+  }
+
+  function sParamOfPath(pathIdx, px, py) {
+    const pts = paths[pathIdx];
+    let bestDist = Infinity, bestT = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const ax = pts[i].x, ay = pts[i].y, bx = pts[i + 1].x, by = pts[i + 1].y;
+      const dx = bx - ax, dy = by - ay;
+      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+      const cx = ax + t * dx, cy = ay + t * dy;
+      const dist = Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
+      if (dist < bestDist) { bestDist = dist; bestT = (i + t) / (pts.length - 1); }
+    }
+    return bestT;
+  }
+
+  function classify(px, py) {
+    let assigned = 0;
+    const sides = [], sLocal = [];
+    for (let i = 0; i < 4; i++) {
+      sides.push(sideOfPath(i, px, py));
+      sLocal.push(sParamOfPath(i, px, py));
+    }
+    for (let i = 1; i < 4; i++) {
+      if (sides[i] <= 0) continue;
+      if (useDomainGuard) {
+        const newInRange = sLocal[i] > 0.0;
+        const curInRange = sLocal[assigned] > 0.0 && sides[assigned] > 0;
+        if (!newInRange && curInRange) continue;
+      }
+      if (useWrapGuard) {
+        if (i === 3 && assigned === 0 && sides[0] > 0) continue;
+      }
+      assigned = i;
+    }
+    return sectorCorner[assigned];
+  }
+
+  function draw() {
+    const margin = 30;
+    const tileS = S - margin * 2;
+
+    ctx.clearRect(0, 0, S, S);
+    ctx.fillStyle = '#0a1628'; ctx.fillRect(0, 0, S, S);
+
+    const img = ctx.createImageData(S, S);
+    for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
+      const u = (px - margin) / tileS, v = (py - margin) / tileS;
+      const i = (py * S + px) * 4;
+      if (u < 0 || u > 1 || v < 0 || v > 1) {
+        img.data[i] = 13; img.data[i+1] = 17; img.data[i+2] = 23; img.data[i+3] = 255;
+        continue;
+      }
+      const corner = classify(u, v);
+      const [r, g, b] = cornerColors[corner];
+      img.data[i] = r; img.data[i+1] = g; img.data[i+2] = b; img.data[i+3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+
+    ctx.strokeStyle = '#ffffff40'; ctx.lineWidth = 1;
+    ctx.strokeRect(margin, margin, tileS, tileS);
+
+    for (let e = 0; e < 4; e++) {
+      ctx.beginPath();
+      for (let i = 0; i < paths[e].length; i++) {
+        const px = margin + paths[e][i].x * tileS, py = margin + paths[e][i].y * tileS;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = edgeColors[e]; ctx.lineWidth = 3; ctx.stroke();
+    }
+
+    const cornerPos = [[margin + 15, S - margin - 10], [S - margin - 15, S - margin - 10],
+                        [S - margin - 15, margin + 18], [margin + 15, margin + 18]];
+    const cornerLabels = ['BL', 'BR', 'TR', 'TL'];
+    for (let i = 0; i < 4; i++) {
+      ctx.fillStyle = `rgb(${cornerColors[i]})`; ctx.font = 'bold 14px monospace';
+      ctx.textAlign = 'center'; ctx.fillText(cornerLabels[i], cornerPos[i][0], cornerPos[i][1]);
+    }
+
+    // Guard status
+    ctx.font = '13px monospace'; ctx.textAlign = 'left';
+    ctx.fillStyle = useDomainGuard ? '#3fb950' : '#f85149';
+    ctx.fillText(`Domain guard: ${useDomainGuard ? 'ON' : 'OFF'}`, margin, S - 5);
+    ctx.fillStyle = useWrapGuard ? '#3fb950' : '#f85149';
+    ctx.fillText(`Wrap guard: ${useWrapGuard ? 'ON' : 'OFF'}`, margin + 200, S - 5);
+  }
+
+  genPaths();
+  draw();
+
+  document.getElementById('chk-guard-domain').onchange = (e) => { useDomainGuard = e.target.checked; draw(); };
+  document.getElementById('chk-guard-wrap').onchange = (e) => { useWrapGuard = e.target.checked; draw(); };
+  document.getElementById('btn-guard-regen').onclick = () => { genPaths(); draw(); };
+};
+
+// ============================================================
+//  SLIDE 11: MASK GENERATION DEMO
+// ============================================================
+slideInits[11] = function initMask() {
 
   const SIZE = 128, CSIZE = 260;
   let seed = 55;
@@ -1671,16 +2571,24 @@ slideInits[9] = function initMask() {
     drawHeatmap(
       document.getElementById('cv-mask-raw').getContext('2d'),
       rawMask, SIZE, SIZE, CSIZE, CSIZE,
-      v => v > 0.5 ? [180, 170, 155] : [55, 130, 35]
+      (v, sx, sy) => {
+        if (v > 0.5) {
+          const ai = (sy * SIZE + sx) * 3;
+          return texturesReady ? [albedoM[ai], albedoM[ai+1], albedoM[ai+2]] : [180, 170, 155];
+        }
+        return [55, 130, 35];
+      }
     );
 
     // Draw blurred
     drawHeatmap(
       document.getElementById('cv-mask-blur').getContext('2d'),
       blurredMask, SIZE, SIZE, CSIZE, CSIZE,
-      v => {
+      (v, sx, sy) => {
         const s = smoothstep(0.2, 0.8, v);
-        return [s * 180 + (1 - s) * 55, s * 170 + (1 - s) * 130, s * 155 + (1 - s) * 35];
+        const ai = (sy * SIZE + sx) * 3;
+        const stR = texturesReady ? albedoM[ai] : 180, stG = texturesReady ? albedoM[ai+1] : 170, stB = texturesReady ? albedoM[ai+2] : 155;
+        return [s * stR + (1 - s) * 55, s * stG + (1 - s) * 130, s * stB + (1 - s) * 35];
       }
     );
 
@@ -1697,7 +2605,7 @@ slideInits[9] = function initMask() {
       const moss = smoothstep(0.02, 0.1, depth) * stone * 0.4;
 
       const ami = idx * 3;
-      const stR = albedoM[ami] || (hv * 160 + 40), stG = albedoM[ami+1] || (hv * 140 + 35), stB = albedoM[ami+2] || (hv * 130 + 30);
+      const stR = texturesReady ? albedoM[ami] : (hv * 160 + 40), stG = texturesReady ? albedoM[ami+1] : (hv * 140 + 35), stB = texturesReady ? albedoM[ami+2] : (hv * 130 + 30);
       const mR = stR * (1 - moss) + 45 * moss;
       const mG = stG * (1 - moss) + 76 * moss;
       const mB = stB * (1 - moss) + 30 * moss;
@@ -1723,9 +2631,9 @@ slideInits[9] = function initMask() {
 };
 
 // ============================================================
-//  SLIDE 12: FINAL RESULT DEMO
+//  SLIDE 14: FINAL RESULT DEMO
 // ============================================================
-slideInits[12] = function initFinal() {
+slideInits[14] = function initFinal() {
 
   const cv = document.getElementById('cv-final');
   const ctx = cv.getContext('2d');
@@ -1775,7 +2683,7 @@ slideInits[12] = function initFinal() {
     const moss = inCrack * stone * 0.35;
 
     const afi = idx * 3;
-    const stR = albedoF[afi] || (hv * 165 + 35), stG = albedoF[afi+1] || (hv * 145 + 30), stB = albedoF[afi+2] || (hv * 135 + 25);
+    const stR = texturesReady ? albedoF[afi] : (hv * 165 + 35), stG = texturesReady ? albedoF[afi+1] : (hv * 145 + 30), stB = texturesReady ? albedoF[afi+2] : (hv * 135 + 25);
     const mR = stR * (1 - moss) + 45 * moss;
     const mG = stG * (1 - moss) + 80 * moss;
     const mB = stB * (1 - moss) + 28 * moss;
