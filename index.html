@@ -417,6 +417,7 @@ s_local = sref &lt; <span class="num">0</span> ? (<span class="num">1.0</span> -
 <span class="cm">// S→BR  E→TR  N→TL  W→BL</span>
 <span class="type">int</span> assigned = <span class="num">0</span>;
 <span class="kw">for</span> (<span class="type">int</span> i = <span class="num">1</span>; i &lt; <span class="num">4</span>; i++) {
+  <span class="kw">if</span> (abs(srefs[i]) == <span class="num">0</span>) <span class="kw">continue</span>;
   <span class="kw">if</span> (raw_sides[i] &lt;= <span class="num">0.0</span>) <span class="kw">continue</span>;
   <span class="cm">// domain guard (next slide)</span>
   <span class="cm">// wrap guard (next slide)</span>
@@ -424,7 +425,7 @@ s_local = sref &lt; <span class="num">0</span> ? (<span class="num">1.0</span> -
 }
 corner = sector_corner[assigned];
 </pre>
-      <p class="small mt-1">Click <strong>Step</strong> to watch each edge claim its territory. Enable <strong>t&prime; shading</strong> to see distance from each crack path &mdash; brighter = further from the boundary.</p>
+      <p class="small mt-1">Click <strong>Step</strong> to watch active transition edges claim their territory. This opposite-corners case activates all four edge refs, so all four quadrants participate. Enable <strong>t&prime; shading</strong> to see distance from each crack path &mdash; brighter = further from the boundary.</p>
     </div>
   </div>
 </section>
@@ -438,7 +439,7 @@ corner = sector_corner[assigned];
       <div class="controls">
         <label><input type="checkbox" id="chk-guard-domain" checked> Domain guard</label>
         <label><input type="checkbox" id="chk-guard-wrap" checked> Wrap guard</label>
-        <label><input type="checkbox" id="chk-guard-srangemin"> s_range_min</label>
+        <label><input type="checkbox" id="chk-guard-srangemin" checked> s_range_min</label>
         <label><input type="checkbox" id="chk-guard-show-oor"> Show out-of-range</label>
         <button id="btn-guard-regen">New Seed</button>
       </div>
@@ -446,7 +447,7 @@ corner = sector_corner[assigned];
     </div>
     <div class="content-block" style="max-width:420px;">
       <h3>Domain guard</h3>
-      <p class="mb-1">The path only covers part of the s-axis. The runtime stores <code>(path_min_s, path_max_s)</code>; for reversed edge references, the effective lower bound is <code>1.0 &minus; path_max_s</code>. The domain guard prevents an out-of-range edge from overwriting one with a valid claim:</p>
+      <p class="mb-1">The path starts after the nominal edge endpoint when center snapping lands inside the corridor. The runtime stores a lower s bound; for reversed edge references that lower bound is <code>1.0 &minus; path_max_s</code>. The upper end stays open so W can fill until it meets S at the wrap seam:</p>
       <pre class="mt-1">
 <span class="type">float</span> s_lo = reversed ? <span class="num">1.0</span> - path_max_s : path_min_s;
 <span class="type">bool</span> new_in_range = s_local[i] &gt; s_lo[i];
@@ -462,7 +463,7 @@ corner = sector_corner[assigned];
     &amp;&amp; raw_sides[<span class="num">0</span>] &gt; <span class="num">0.0</span>)
   <span class="kw">continue</span>;
 </pre>
-      <p class="small mt-1">Toggle each guard to see the artifacts it prevents. Enable <strong>s_range_min</strong> to use the path's actual coverage range instead of s&gt;0. <strong>Show out-of-range</strong> dims pixels outside the path's s domain.</p>
+      <p class="small mt-1">Toggle each guard to see the artifacts it prevents. Disable <strong>s_range_min</strong> to fall back to the infinite half-plane test. <strong>Show out-of-range</strong> dims pixels before the path starts.</p>
     </div>
   </div>
 </section>
@@ -850,15 +851,291 @@ function gaussBlur(src, w, h, radius) {
   return dst;
 }
 
+const EDGE_DIRS = [[0,1],[1,0],[0,-1],[-1,0]]; // S, E, N, W
+const SECTOR_CORNER = [1, 2, 3, 0];
+const PATH_NEIGHBORS = [[0,-1],[1,0],[0,1],[-1,0],[1,-1],[1,1],[-1,1],[-1,-1]];
+const PATH_NEIGHBOR_LENGTHS = [1,1,1,1,Math.SQRT2,Math.SQRT2,Math.SQRT2,Math.SQRT2];
+const PATH_DIAG_AXES = [[0,1],[2,1],[2,3],[0,3]];
+
+function edgeFrame(cA, cB) {
+  const du = cB.u - cA.u, dv = cB.v - cA.v;
+  const len = Math.sqrt(du * du + dv * dv);
+  if (len < 0.001) return null;
+  const tx = du / len, ty = dv / len;
+  return { tx, ty, nx: -ty, ny: tx, invLen: 1 / len, cA };
+}
+
+function orderedByCenter(a, b) {
+  return a.u < b.u || (a.u === b.u && a.v <= b.v)
+    ? { a, b, aFirst: true }
+    : { a: b, b: a, aFirst: false };
+}
+
+function buildStraightEdgeData(cA, cB, numBuckets) {
+  const frame = edgeFrame(cA, cB);
+  if (!frame) return null;
+  return {
+    ...frame,
+    tUpper: new Float32Array(numBuckets),
+    sRangeMin: 0,
+    sRangeMax: 1,
+  };
+}
+
+function buildPathEdgeData(cA, cB, points, numBuckets) {
+  const frame = edgeFrame(cA, cB);
+  if (!frame || !points || points.length < 2) {
+    return buildStraightEdgeData(cA, cB, numBuckets);
+  }
+
+  const tUpper = new Float32Array(numBuckets).fill(-1e10);
+  let sRangeMin = 1.0;
+  let sRangeMax = 0.0;
+
+  const local = points.map(p => {
+    const du = p.u - cA.u, dv = p.v - cA.v;
+    return {
+      p,
+      s: (du * frame.tx + dv * frame.ty) * frame.invLen,
+      t: du * frame.nx + dv * frame.ny,
+    };
+  });
+
+  for (let i = 0; i < local.length; i++) {
+    const s = local[i].s;
+    sRangeMin = Math.min(sRangeMin, s);
+    sRangeMax = Math.max(sRangeMax, s);
+  }
+
+  // Production traceback walks sink->source and skips any segment that moves
+  // forward in s. When that happens, prev_uv is intentionally not advanced, so
+  // the next accepted segment bridges from the last monotonic point.
+  let prev = null;
+  for (let i = local.length - 1; i >= 0; i--) {
+    const cur = local[i];
+    let skipSegment = false;
+    if (prev) {
+      if (cur.s > prev.s) {
+        skipSegment = true;
+      } else {
+        let sp = prev.s, sc = cur.s;
+        let tp = prev.t, tc = cur.t;
+        if (sp > sc) {
+          const tmpS = sp; sp = sc; sc = tmpS;
+          const tmpT = tp; tp = tc; tc = tmpT;
+        }
+        const bLo = Math.max(0, Math.min(numBuckets - 1, Math.floor(sp * (numBuckets - 1))));
+        const bHi = Math.max(0, Math.min(numBuckets - 1, Math.ceil(sc * (numBuckets - 1))));
+        const ds = Math.max(sc - sp, 1e-8);
+        for (let b = bLo; b <= bHi; b++) {
+          const sAt = b / (numBuckets - 1);
+          const frac = Math.max(0, Math.min(1, (sAt - sp) / ds));
+          const tAt = tp + (tc - tp) * frac;
+          if (tAt > tUpper[b]) tUpper[b] = tAt;
+        }
+      }
+    }
+    if (!skipSegment) prev = cur;
+  }
+
+  for (let b = 0; b < numBuckets; b++) {
+    if (tUpper[b] > -1e9) continue;
+    let left = b - 1; while (left >= 0 && tUpper[left] <= -1e9) left--;
+    let right = b + 1; while (right < numBuckets && tUpper[right] <= -1e9) right++;
+    if (left < 0 && right >= numBuckets) tUpper[b] = 0;
+    else if (left < 0) tUpper[b] = tUpper[right];
+    else if (right >= numBuckets) tUpper[b] = tUpper[left];
+    else tUpper[b] = tUpper[left] + (tUpper[right] - tUpper[left]) * (b - left) / (right - left);
+  }
+  tUpper[0] = 0;
+  tUpper[numBuckets - 1] = 0;
+
+  // Pin s range to [0,1] to match the tUpper endpoint pinning above.
+  // The corridor solver can produce paths whose raw s extent goes outside
+  // [0,1].  A negative sRangeMin lets the domain guard treat s<0 pixels
+  // as "in range", and a sRangeMax<1 lets the sref=-1 transform mark
+  // high-s pixels as "out of range" — both allow later edges to overwrite
+  // valid earlier claims in the pinned-endpoint region.
+  sRangeMin = 0;
+  sRangeMax = 1;
+
+  return {
+    ...frame,
+    tUpper,
+    sRangeMin,
+    sRangeMax,
+  };
+}
+
+function signedEdgeRefForCorner(edge, cornerUv) {
+  // Mirrors production tileEdgeRefs: sign is selected in the canonical edge
+  // frame so positive raw_side points toward this edge sector's corner.
+  const t = (cornerUv[0] - edge.cA.u) * edge.nx + (cornerUv[1] - edge.cA.v) * edge.ny;
+  return t >= 0 ? 1 : -1;
+}
+
+function edgeBoundaryPoints(edge, numBuckets) {
+  if (!edge) return [];
+  const len = 1 / edge.invLen;
+  const pts = [];
+  for (let b = 0; b < numBuckets; b++) {
+    const s = b / (numBuckets - 1);
+    const t = edge.tUpper[b];
+    pts.push({
+      u: edge.cA.u + edge.tx * (s * len) + edge.nx * t,
+      v: edge.cA.v + edge.ty * (s * len) + edge.ny * t,
+    });
+  }
+  return pts;
+}
+
+function withSignedRef(edge, sref) {
+  return edge ? { ...edge, sref } : null;
+}
+
+function edgeNeedsPath(cornerStone, edgeIndex) {
+  return cornerStone[edgeIndex] !== cornerStone[(edgeIndex + 1) % 4];
+}
+
+function keepOnlyTransitionEdges(td) {
+  for (let e = 0; e < 4; e++) {
+    if (edgeNeedsPath(td.cornerStone, e)) continue;
+    td.edgeData[e] = null;
+    td.paths[e] = [];
+  }
+  return td;
+}
+
+function solveCorridorPath(geoA, geoB, snapA, snapB, gridW, gridH, halfWidth, endpointPad, costFn) {
+  const frame = edgeFrame(geoA, geoB);
+  if (!frame) return { points: [], metaA: snapA, metaB: snapB };
+
+  const len = 1 / frame.invLen;
+  // Compute snap offsets in the corridor's local frame so the grid
+  // always contains both snapped centres (snap can move farther than
+  // the base endpointPad).
+  const sA = (snapA.u - geoA.u) * frame.tx + (snapA.v - geoA.v) * frame.ty;
+  const sB = (snapB.u - geoA.u) * frame.tx + (snapB.v - geoA.v) * frame.ty;
+  const tA = (snapA.u - geoA.u) * frame.nx + (snapA.v - geoA.v) * frame.ny;
+  const tB = (snapB.u - geoA.u) * frame.nx + (snapB.v - geoA.v) * frame.ny;
+  const localMinS = Math.min(-endpointPad, sA - endpointPad);
+  const localMaxS = Math.max(len + endpointPad, sB + endpointPad);
+  const localMinT = Math.min(-halfWidth, tA - endpointPad, tB - endpointPad);
+  const localMaxT = Math.max(halfWidth, tA + endpointPad, tB + endpointPad);
+  const sSpan = Math.max(localMaxS - localMinS, 0.0001);
+  const tSpan = Math.max(localMaxT - localMinT, 0.0001);
+
+  const inside = (x, y) => x >= 0 && x < gridW && y >= 0 && y < gridH;
+  const uvAtLocal = (x, y) => {
+    const s = localMinS + (x + 0.5) / gridW * sSpan;
+    const t = localMinT + (y + 0.5) / gridH * tSpan;
+    return {
+      u: geoA.u + frame.tx * s + frame.nx * t,
+      v: geoA.v + frame.ty * s + frame.ny * t,
+    };
+  };
+  const centerLocal = (p) => {
+    const du = p.u - geoA.u, dv = p.v - geoA.v;
+    const s = du * frame.tx + dv * frame.ty;
+    const t = du * frame.nx + dv * frame.ny;
+    return {
+      x: Math.max(0, Math.min(gridW - 1, (s - localMinS) / sSpan * gridW - 0.5)),
+      y: Math.max(0, Math.min(gridH - 1, (t - localMinT) / tSpan * gridH - 0.5)),
+    };
+  };
+
+  const aLocal = centerLocal(snapA);
+  const bLocal = centerLocal(snapB);
+  const aFloor = { x: Math.floor(aLocal.x), y: Math.floor(aLocal.y) };
+  const bFloor = { x: Math.floor(bLocal.x), y: Math.floor(bLocal.y) };
+  const metaA = uvAtLocal(aLocal.x, aLocal.y);
+  const metaB = uvAtLocal(bLocal.x, bLocal.y);
+
+  const cost = new Float32Array(gridW * gridH);
+  const dist = new Float32Array(gridW * gridH).fill(1e10);
+  const pred = new Int32Array(gridW * gridH).fill(-1);
+  const cellUV = new Float32Array(gridW * gridH * 2);
+
+  for (let y = 0; y < gridH; y++) for (let x = 0; x < gridW; x++) {
+    const uv = uvAtLocal(x, y);
+    const idx = y * gridW + x;
+    cost[idx] = costFn(uv.u, uv.v);
+    cellUV[idx * 2] = uv.u;
+    cellUV[idx * 2 + 1] = uv.v;
+  }
+
+  for (let dy = 0; dy <= 1; dy++) for (let dx = 0; dx <= 1; dx++) {
+    const x = aFloor.x + dx, y = aFloor.y + dy;
+    if (!inside(x, y)) continue;
+    const idx = y * gridW + x;
+    dist[idx] = Math.hypot(x - aLocal.x, y - aLocal.y);
+    pred[idx] = idx;
+  }
+
+  for (let pass = 0; pass < gridW + gridH; pass++) {
+    let changed = false;
+    for (let y = 0; y < gridH; y++) for (let x = 0; x < gridW; x++) {
+      const idx = y * gridW + x;
+      const selfCost = cost[idx];
+      for (let n = 0; n < 8; n++) {
+        const bx = x + PATH_NEIGHBORS[n][0], by = y + PATH_NEIGHBORS[n][1];
+        if (!inside(bx, by)) continue;
+        if (n >= 4) {
+          const axes = PATH_DIAG_AXES[n - 4];
+          const ax0 = PATH_NEIGHBORS[axes[0]], ax1 = PATH_NEIGHBORS[axes[1]];
+          if (!inside(x + ax0[0], y + ax0[1]) || !inside(x + ax1[0], y + ax1[1])) continue;
+        }
+        const nIdx = by * gridW + bx;
+        const edgeCost = PATH_NEIGHBOR_LENGTHS[n] * 0.5 * (selfCost + cost[nIdx]);
+        const cand = dist[nIdx] + edgeCost;
+        if (cand < dist[idx] - 1e-6) {
+          dist[idx] = cand;
+          pred[idx] = nIdx;
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+
+  let bestIdx = -1, bestD = 1e10;
+  for (let dy = 0; dy <= 1; dy++) for (let dx = 0; dx <= 1; dx++) {
+    const x = bFloor.x + dx, y = bFloor.y + dy;
+    if (!inside(x, y)) continue;
+    const idx = y * gridW + x;
+    if (dist[idx] < bestD) { bestD = dist[idx]; bestIdx = idx; }
+  }
+  if (bestIdx < 0 || bestD >= 1e10) return { points: [], metaA, metaB };
+
+  const pathIndices = [];
+  let cur = bestIdx;
+  for (let i = 0; i < gridW * gridH; i++) {
+    pathIndices.push(cur);
+    const x = cur % gridW, y = Math.floor(cur / gridW);
+    if (x >= aFloor.x && x <= aFloor.x + 1 && y >= aFloor.y && y <= aFloor.y + 1) break;
+    const p = pred[cur];
+    if (p < 0 || p === cur) break;
+    cur = p;
+  }
+  pathIndices.reverse();
+
+  return {
+    points: pathIndices.map(idx => ({
+      u: cellUV[idx * 2],
+      v: cellUV[idx * 2 + 1],
+    })),
+    metaA,
+    metaB,
+  };
+}
+
 // Shared tile data builder: runs the full crack-following pipeline
-// (heightmap, center snap, corridor solve, tUpper, sRangeMin)
+// (heightmap, center snap, corridor solve, tUpper, s range)
 function buildTileData(seed, geoU, geoV, cornerStoneConfig, ext) {
   const HS = 128;
   const NUM_BUCKETS = 64;
   const ECW = 72, ECH = 28;
-  const NBRS = [[0,-1],[1,0],[0,1],[-1,0],[1,-1],[1,1],[-1,1],[-1,-1]];
-  const NLEN = [1,1,1,1,Math.SQRT2,Math.SQRT2,Math.SQRT2,Math.SQRT2];
-  const sectorCorner = [1, 2, 3, 0];
+  const sectorCorner = SECTOR_CORNER;
   const cornerStone = cornerStoneConfig || [0, 0, 1, 0];
   const cornerUVs = [[0, 1], [1, 1], [1, 0], [0, 0]];
 
@@ -912,94 +1189,8 @@ function buildTileData(seed, geoU, geoV, cornerStoneConfig, ext) {
     return inCrack * 1.0 + (1.0 - inCrack) * 16.0;
   }
 
-  function solveCorridor(cA, cB) {
-    const du = cB.u - cA.u, dv = cB.v - cA.v;
-    const len = Math.sqrt(du * du + dv * dv);
-    if (len < 0.001) return { points: [], sRangeMin: 0 };
-    const tx = du / len, ty = dv / len, nx = -ty, ny = tx;
-    const corridorPadUV = 64 / HS;
-    const halfW = corridorPadUV;
-    const pad = 4 / HS;
-
-    const cost = new Float32Array(ECW * ECH);
-    const dist = new Float32Array(ECW * ECH).fill(1e10);
-    const pred = new Int32Array(ECW * ECH).fill(-1);
-    const cellUV = new Float32Array(ECW * ECH * 2);
-
-    for (let cy = 0; cy < ECH; cy++) for (let cx = 0; cx < ECW; cx++) {
-      const s = cx / (ECW - 1);
-      const t = (cy / (ECH - 1) - 0.5) * 2;
-      const u = cA.u + tx * (s * (len + 2 * pad) - pad) + nx * t * halfW;
-      const v = cA.v + ty * (s * (len + 2 * pad) - pad) + ny * t * halfW;
-      const ci = cy * ECW + cx;
-      cost[ci] = getCrackCost(u, v);
-      cellUV[ci * 2] = u;
-      cellUV[ci * 2 + 1] = v;
-    }
-
-    const srcFx = pad / (len + 2 * pad) * (ECW - 1);
-    const srcX = Math.round(srcFx), srcY = Math.floor(ECH / 2);
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      const sx = srcX + dx, sy = srcY + dy;
-      if (sx >= 0 && sx < ECW && sy >= 0 && sy < ECH) {
-        const d = Math.sqrt(dx * dx + dy * dy) * cost[sy * ECW + sx];
-        dist[sy * ECW + sx] = d;
-        pred[sy * ECW + sx] = sy * ECW + sx;
-      }
-    }
-
-    const sinkFx = (len + pad) / (len + 2 * pad) * (ECW - 1);
-    const sinkX = Math.round(sinkFx), sinkY = Math.floor(ECH / 2);
-
-    for (let pass = 0; pass < ECW + ECH; pass++) {
-      let changed = false;
-      for (let y = 0; y < ECH; y++) for (let x = 0; x < ECW; x++) {
-        const idx = y * ECW + x;
-        const sc = cost[idx];
-        for (let n = 0; n < 8; n++) {
-          const bx = x + NBRS[n][0], by = y + NBRS[n][1];
-          if (bx < 0 || bx >= ECW || by < 0 || by >= ECH) continue;
-          const nIdx = by * ECW + bx;
-          const ec = NLEN[n] * 0.5 * (sc + cost[nIdx]);
-          const cand = dist[nIdx] + ec;
-          if (cand < dist[idx] - 0.001) {
-            dist[idx] = cand;
-            pred[idx] = nIdx;
-            changed = true;
-          }
-        }
-      }
-      if (!changed) break;
-    }
-
-    let bestIdx = sinkY * ECW + sinkX, bestD = dist[bestIdx];
-    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
-      const sx = sinkX + dx, sy = sinkY + dy;
-      if (sx >= 0 && sx < ECW && sy >= 0 && sy < ECH) {
-        const idx = sy * ECW + sx;
-        if (dist[idx] < bestD) { bestD = dist[idx]; bestIdx = idx; }
-      }
-    }
-    const pathIndices = [];
-    let cur = bestIdx;
-    for (let i = 0; i < ECW * ECH; i++) {
-      pathIndices.push(cur);
-      const p = pred[cur];
-      if (p < 0 || p === cur) break;
-      cur = p;
-    }
-    pathIndices.reverse();
-
-    const invLen = 1 / len;
-    let sMin = 1.0;
-    const points = pathIndices.map(idx => {
-      const pu = cellUV[idx * 2], pv = cellUV[idx * 2 + 1];
-      const sStep = ((pu - cA.u) * tx + (pv - cA.v) * ty) * invLen;
-      sMin = Math.min(sMin, sStep);
-      return { u: pu, v: pv };
-    });
-
-    return { points, sRangeMin: sMin };
+  function solveCorridor(geoA, geoB, snapA, snapB) {
+    return solveCorridorPath(geoA, geoB, snapA, snapB, ECW, ECH, 64 / HS, 4 / HS, getCrackCost);
   }
 
   const center = snapToNearestCrack(geoU, geoV);
@@ -1011,60 +1202,22 @@ function buildTileData(seed, geoU, geoV, cornerStoneConfig, ext) {
   ];
   const neighborSnapped = neighborGeo.map(g => snapToNearestCrack(g.u, g.v));
 
-  const corridorResults = neighborSnapped.map(n =>
-    solveCorridor(center, n)
-  );
-  const paths = corridorResults.map(r => r.points);
-
   const edgeData = [];
+  const paths = [];
   for (let e = 0; e < 4; e++) {
-    const cA = center, cB = neighborSnapped[e];
-    const du = cB.u - cA.u, dv = cB.v - cA.v;
-    const len = Math.sqrt(du * du + dv * dv);
-    if (len < 0.001 || paths[e].length < 2) { edgeData.push(null); continue; }
-    const tx = du / len, ty = dv / len, nx = -ty, ny = tx;
-    const invLen = 1 / len;
-
-    const tUpper = new Float32Array(NUM_BUCKETS).fill(-1e10);
-    const p = paths[e];
-    for (let i = 0; i < p.length - 1; i++) {
-      let sA = ((p[i].u - cA.u) * tx + (p[i].v - cA.v) * ty) * invLen;
-      let tA = (p[i].u - cA.u) * nx + (p[i].v - cA.v) * ny;
-      let sB = ((p[i+1].u - cA.u) * tx + (p[i+1].v - cA.v) * ty) * invLen;
-      let tB = (p[i+1].u - cA.u) * nx + (p[i+1].v - cA.v) * ny;
-      if (sA > sB) { let tmp = sA; sA = sB; sB = tmp; tmp = tA; tA = tB; tB = tmp; }
-      const bLo = Math.max(0, Math.min(NUM_BUCKETS - 1, Math.floor(sA * (NUM_BUCKETS - 1))));
-      const bHi = Math.max(0, Math.min(NUM_BUCKETS - 1, Math.ceil(sB * (NUM_BUCKETS - 1))));
-      const ds = Math.max(sB - sA, 1e-8);
-      for (let b = bLo; b <= bHi; b++) {
-        const sAt = b / (NUM_BUCKETS - 1);
-        const frac = Math.max(0, Math.min(1, (sAt - sA) / ds));
-        const tAt = tA + (tB - tA) * frac;
-        if (tAt > tUpper[b]) tUpper[b] = tAt;
-      }
-    }
-    for (let b = 0; b < NUM_BUCKETS; b++) {
-      if (tUpper[b] > -1e9) continue;
-      let left = b - 1; while (left >= 0 && tUpper[left] <= -1e9) left--;
-      let right = b + 1; while (right < NUM_BUCKETS && tUpper[right] <= -1e9) right++;
-      if (left < 0 && right >= NUM_BUCKETS) tUpper[b] = 0;
-      else if (left < 0) tUpper[b] = tUpper[right];
-      else if (right >= NUM_BUCKETS) tUpper[b] = tUpper[left];
-      else tUpper[b] = tUpper[left] + (tUpper[right] - tUpper[left]) * (b - left) / (right - left);
-    }
-    tUpper[0] = 0;
-    tUpper[NUM_BUCKETS - 1] = 0;
-
+    const geoOrder = orderedByCenter({ u: geoU, v: geoV }, neighborGeo[e]);
+    const currentIsA = geoOrder.aFirst;
+    const geoA = currentIsA ? { u: geoU, v: geoV } : neighborGeo[e];
+    const geoB = currentIsA ? neighborGeo[e] : { u: geoU, v: geoV };
+    const snapA = currentIsA ? center : neighborSnapped[e];
+    const snapB = currentIsA ? neighborSnapped[e] : center;
+    const result = solveCorridor(geoA, geoB, snapA, snapB);
+    paths.push(result.points);
+    const sharedEdge = buildPathEdgeData(result.metaA, result.metaB, result.points, NUM_BUCKETS);
+    if (!sharedEdge) { edgeData.push(null); continue; }
     const cu = cornerUVs[sectorCorner[e]];
-    const cs = ((cu[0] - cA.u) * tx + (cu[1] - cA.v) * ty) * invLen;
-    const ct = (cu[0] - cA.u) * nx + (cu[1] - cA.v) * ny;
-    const csc = Math.max(0, Math.min(1, cs));
-    const bf = csc * (NUM_BUCKETS - 1);
-    const b0 = Math.floor(bf), b1 = Math.min(b0 + 1, NUM_BUCKETS - 1);
-    const pathT = tUpper[b0] + (tUpper[b1] - tUpper[b0]) * (bf - b0);
-    const sref = (ct - pathT) >= 0 ? 1 : -1;
-
-    edgeData.push({ tx, ty, nx, ny, invLen, tUpper, sref, cA, sRangeMin: corridorResults[e].sRangeMin });
+    const signFrame = edgeFrame(geoOrder.a, geoOrder.b);
+    edgeData.push(withSignedRef(sharedEdge, signedEdgeRefForCorner(signFrame || sharedEdge, cu)));
   }
 
   return {
@@ -1084,6 +1237,7 @@ function classifyPixel(u, v, td, opts) {
   const rawSides = [0, 0, 0, 0];
   const sLocal = [0, 0, 0, 0];
   const sRangeMins = [0, 0, 0, 0];
+  const sRangeMaxs = [1, 1, 1, 1];
   for (let e = 0; e < 4; e++) {
     const ed = td.edgeData[e];
     if (!ed) { rawSides[e] = 0; sLocal[e] = -999; continue; }
@@ -1099,13 +1253,14 @@ function classifyPixel(u, v, td, opts) {
     const sMin = ed.sRangeMin !== undefined ? ed.sRangeMin : 0;
     const sMax = ed.sRangeMax !== undefined ? ed.sRangeMax : 1;
     sRangeMins[e] = useSRangeMin ? (ed.sref < 0 ? 1 - sMax : sMin) : 0;
+    sRangeMaxs[e] = useSRangeMin ? (ed.sref < 0 ? 1 - sMin : sMax) : 1;
   }
   let assigned = 0;
   for (let i = 1; i < upToEdge; i++) {
     if (rawSides[i] <= 0) continue;
     if (useDomainGuard) {
-      const newInRange = sLocal[i] > sRangeMins[i];
-      const curInRange = sLocal[assigned] > sRangeMins[assigned] && rawSides[assigned] > 0;
+      const newInRange = sLocal[i] > sRangeMins[i] && sLocal[i] <= sRangeMaxs[i];
+      const curInRange = sLocal[assigned] > sRangeMins[assigned] && sLocal[assigned] <= sRangeMaxs[assigned] && rawSides[assigned] > 0;
       if (!newInRange && curInRange) continue;
     }
     if (useWrapGuard) {
@@ -1113,7 +1268,7 @@ function classifyPixel(u, v, td, opts) {
     }
     assigned = i;
   }
-  return { assigned, corner: td.sectorCorner[assigned], rawSides, sLocal, sRangeMins };
+  return { assigned, corner: td.sectorCorner[assigned], rawSides, sLocal, sRangeMins, sRangeMaxs };
 }
 
 function drawHeatmap(ctx, data, w, h, cw, ch, colorFn) {
@@ -1175,7 +1330,7 @@ slideInits[1] = function initMotivation() {
     const cv = document.getElementById('cv-crackfollow');
     const ctx = cv.getContext('2d');
 
-    const td = buildTileData(42, 0.4, 0.6, [0, 0, 1, 0]);
+    const td = keepOnlyTransitionEdges(buildTileData(42, 0.4, 0.6, [0, 0, 1, 0]));
 
     const mask = new Float32Array(S * S);
     for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
@@ -2364,7 +2519,8 @@ slideInits[9] = function initSequentialOverwrite() {
   const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e'];
   const edgeNames = ['S (→BR)', 'E (→TR)', 'N (→TL)', 'W (→BL)'];
 
-  let td = buildTileData(42, 0.4, 0.6, [0, 0, 1, 0]);
+  const flapDemoCase = [0, 1, 0, 1]; // opposite stone corners: all four edges transition
+  let td = keepOnlyTransitionEdges(buildTileData(3, 0.5, 0.5, flapDemoCase));
   let showPaths = true;
   let tShade = false;
   let currentStep = -1;
@@ -2401,7 +2557,7 @@ slideInits[9] = function initSequentialOverwrite() {
     if (showPaths) {
       const limit = upToEdge !== undefined ? upToEdge + 1 : 4;
       for (let e = 0; e < limit; e++) {
-        const p = td.paths[e];
+        const p = edgeBoundaryPoints(td.edgeData[e], td.NUM_BUCKETS);
         if (!p || p.length < 2) continue;
         ctx.beginPath();
         for (let i = 0; i < p.length; i++) {
@@ -2459,7 +2615,7 @@ slideInits[9] = function initSequentialOverwrite() {
     document.getElementById('flap-step-label').textContent = `Edge ${currentStep + 1}/4: ${edgeNames[currentStep]}`;
   };
   document.getElementById('btn-flap-regen').onclick = () => {
-    td = buildTileData(Math.floor(Math.random() * 10000), 0.4, 0.6, [0, 0, 1, 0]);
+    td = keepOnlyTransitionEdges(buildTileData(Math.floor(Math.random() * 10000), 0.5, 0.5, flapDemoCase));
     currentStep = -1;
     document.getElementById('flap-step-label').textContent = 'All edges';
     draw();
@@ -2485,8 +2641,9 @@ slideInits[10] = function initDomainGuards() {
   const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e'];
   const edgeNames = ['S','E','N','W'];
 
-  let td = buildTileData(42, 0.4, 0.6, [0, 0, 1, 0]);
-  let useDomainGuard = true, useWrapGuard = true, useSRangeMin = false, showOOR = false;
+  const guardDemoCase = [0, 1, 0, 1]; // opposite stone corners: all four edges transition
+  let td = keepOnlyTransitionEdges(buildTileData(3, 0.5, 0.5, guardDemoCase));
+  let useDomainGuard = true, useWrapGuard = true, useSRangeMin = true, showOOR = false;
 
   function draw() {
     ctx.clearRect(0, 0, S, S);
@@ -2502,9 +2659,7 @@ slideInits[10] = function initDomainGuards() {
       let shade = 0.6;
 
       if (showOOR) {
-        const ed = td.edgeData[r.assigned];
-        const sMin = ed ? (useSRangeMin ? ed.sRangeMin : 0) : 0;
-        if (r.sLocal[r.assigned] <= sMin) shade = 0.15;
+        if (r.sLocal[r.assigned] <= r.sRangeMins[r.assigned]) shade = 0.15;
       }
 
       const sx = Math.floor(u * td.HS), sy = Math.floor(v * td.HS);
@@ -2523,7 +2678,7 @@ slideInits[10] = function initDomainGuards() {
     ctx.putImageData(img, 0, 0);
 
     for (let e = 0; e < 4; e++) {
-      const p = td.paths[e];
+      const p = edgeBoundaryPoints(td.edgeData[e], td.NUM_BUCKETS);
       if (!p || p.length < 2) continue;
       ctx.beginPath();
       for (let i = 0; i < p.length; i++) {
@@ -2558,7 +2713,7 @@ slideInits[10] = function initDomainGuards() {
       if (useWrapGuard && i === 3 && r.assigned === 0 && r.rawSides[0] > 0) blocked.push('wrap');
       if (blocked.length) guardInfo.push(`${edgeNames[i]} blocked by ${blocked.join('+')}`);
     }
-    info.innerHTML = `assigned=${edgeNames[r.assigned]}  raw=[${r.rawSides.map(v=>v.toFixed(3)).join(', ')}]  s=[${r.sLocal.map(v=>v.toFixed(2)).join(', ')}]` +
+    info.innerHTML = `assigned=${edgeNames[r.assigned]}  raw=[${r.rawSides.map(v=>v.toFixed(3)).join(', ')}]  s=[${r.sLocal.map(v=>v.toFixed(2)).join(', ')}]  s_lo=[${r.sRangeMins.map(v=>v.toFixed(2)).join(', ')}]` +
       (guardInfo.length ? `<br>${guardInfo.join(' | ')}` : '');
   };
   cv.onmouseleave = () => { document.getElementById('guard-hover-info').innerHTML = ''; };
@@ -2568,7 +2723,7 @@ slideInits[10] = function initDomainGuards() {
   document.getElementById('chk-guard-srangemin').onchange = (e) => { useSRangeMin = e.target.checked; draw(); };
   document.getElementById('chk-guard-show-oor').onchange = (e) => { showOOR = e.target.checked; draw(); };
   document.getElementById('btn-guard-regen').onclick = () => {
-    td = buildTileData(Math.floor(Math.random() * 10000), 0.4, 0.6, [0, 0, 1, 0]);
+    td = keepOnlyTransitionEdges(buildTileData(Math.floor(Math.random() * 10000), 0.5, 0.5, guardDemoCase));
     draw();
   };
 };
@@ -2579,7 +2734,7 @@ slideInits[10] = function initDomainGuards() {
 slideInits[11] = function initMask() {
 
   const CSIZE = 260;
-  let td = buildTileData(55, 0.4, 0.6, [0, 0, 0, 1]);
+  let td = keepOnlyTransitionEdges(buildTileData(55, 0.4, 0.6, [0, 0, 0, 1]));
   const HS = td.HS;
 
   function genMask() {
@@ -2636,7 +2791,7 @@ slideInits[11] = function initMask() {
     genMask();
   };
   document.getElementById('btn-mask-regen').onclick = () => {
-    td = buildTileData(Math.floor(Math.random() * 10000), 0.4, 0.6, [0, 0, 0, 1]);
+    td = keepOnlyTransitionEdges(buildTileData(Math.floor(Math.random() * 10000), 0.4, 0.6, [0, 0, 0, 1]));
     genMask();
   };
 };
@@ -2653,10 +2808,9 @@ slideInits[14] = function initFinal() {
   const HS = 128;
   const NUM_BUCKETS = 64;
   const ECW = 72, ECH = 28;
-  const NBRS = [[0,-1],[1,0],[0,1],[-1,0],[1,-1],[1,1],[-1,1],[-1,-1]];
-  const NLEN = [1,1,1,1,Math.SQRT2,Math.SQRT2,Math.SQRT2,Math.SQRT2];
-  const sectorCorner = [1, 2, 3, 0];
+  const sectorCorner = SECTOR_CORNER;
   const MW = tilesX * HS, MH = tilesY * HS;
+  const TEX_SCALE = 3.12;
 
   // Square texture avoids aspect-ratio stretching
   const TS = 512;
@@ -2664,187 +2818,146 @@ slideInits[14] = function initFinal() {
   const bigAlbedo = generateStoneAlbedo(TS, TS, 42);
   const bigBlur = boxBlur(bigHeight, TS, TS, 8);
 
-  function render() {
-    const TEX_SCALE = 3.12;
+  function sampleH(gu, gv) {
+    const sx = ((Math.floor(gu * HS * TEX_SCALE) % TS) + TS) % TS;
+    const sy = ((Math.floor(gv * HS * TEX_SCALE) % TS) + TS) % TS;
+    const idx = sy * TS + sx;
+    return { h: bigHeight[idx], b: bigBlur[idx], idx };
+  }
 
-    function sampleH(gu, gv) {
-      const sx = ((Math.floor(gu * HS * TEX_SCALE) % TS) + TS) % TS;
-      const sy = ((Math.floor(gv * HS * TEX_SCALE) % TS) + TS) % TS;
-      const idx = sy * TS + sx;
-      return { h: bigHeight[idx], b: bigBlur[idx], idx };
-    }
-    function crackCost(gu, gv) {
-      const s = sampleH(gu, gv);
+  function crackCost(gu, gv) {
+    const s = sampleH(gu, gv);
+    const depth = s.b - s.h;
+    const inCrack = smoothstep(0.01, 0.09, depth);
+    return inCrack * 1.0 + (1.0 - inCrack) * 16.0;
+  }
+
+  function snapCrack(gu, gv) {
+    const R = 8, step = 0.5 / R, ext = R * step;
+    let best = 1e10, bu = gu, bv = gv;
+    for (let dr = -R; dr <= R; dr++) for (let dc = -R; dc <= R; dc++) {
+      const su = gu + dc * step, sv = gv + dr * step;
+      const s = sampleH(su, sv);
       const depth = s.b - s.h;
-      return smoothstep(0.01, 0.09, depth) * 1.0 + (1.0 - smoothstep(0.01, 0.09, depth)) * 16.0;
+      const inCr = smoothstep(0.01, 0.09, depth);
+      const isStone = inCr < 0.5 ? 1.0 : 0.0;
+      const dist = Math.hypot(su - gu, sv - gv) / Math.max(ext, 0.0001);
+      const score = isStone * 1000.0 + dist;
+      if (score < best) { best = score; bu = su; bv = sv; }
     }
-    function snapCrack(gu, gv) {
-      const R = 8, step = 0.5 / R, ext = R * step;
-      let best = 1e10, bu = gu, bv = gv;
-      for (let dr = -R; dr <= R; dr++) for (let dc = -R; dc <= R; dc++) {
-        const su = gu + dc * step, sv = gv + dr * step;
-        const s = sampleH(su, sv);
-        const depth = s.b - s.h;
-        const inCr = smoothstep(0.01, 0.09, depth);
-        const isStone = inCr < 0.5 ? 1.0 : 0.0;
-        const dist = Math.hypot(su - gu, sv - gv) / Math.max(ext, 0.0001);
-        const score = isStone * 1000.0 + dist;
-        if (score < best) { best = score; bu = su; bv = sv; }
+    return { u: bu, v: bv };
+  }
+
+  function solveCorridor(geoA, geoB, snapA, snapB) {
+    return solveCorridorPath(geoA, geoB, snapA, snapB, ECW, ECH, 64 / HS, 4 / HS, crackCost);
+  }
+
+  function vertStone(vx, vy) {
+    if (vx === 0 || vx === tilesX || vy === 0 || vy === tilesY) return 0;
+    return 1;
+  }
+
+  const centers = [];
+  for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) {
+    centers.push(snapCrack(tx + 0.5, ty + 0.5));
+  }
+  function getCenter(tx, ty) {
+    if (tx < 0 || tx >= tilesX || ty < 0 || ty >= tilesY) return snapCrack(tx + 0.5, ty + 0.5);
+    return centers[ty * tilesX + tx];
+  }
+
+  function orderedTiles(txA, tyA, txB, tyB) {
+    const aFirst = txA < txB || (txA === txB && tyA <= tyB);
+    return aFirst
+      ? [{ tx: txA, ty: tyA }, { tx: txB, ty: tyB }]
+      : [{ tx: txB, ty: tyB }, { tx: txA, ty: tyA }];
+  }
+
+  function edgeKey(tx1, ty1, tx2, ty2) {
+    const vertical = tx1 !== tx2;
+    return `${Math.min(tx1, tx2)},${Math.min(ty1, ty2)},${vertical ? 'v' : 'h'}`;
+  }
+
+  const edgeCache = {};
+  function getSharedEdge(txA, tyA, txB, tyB, needsPath) {
+    const key = edgeKey(txA, tyA, txB, tyB);
+    if (edgeCache[key] && (!needsPath || edgeCache[key].needsPath)) return edgeCache[key];
+
+    // Shared edges are stored once in canonical direction. Each tile adds only
+    // its signed edge ref, matching the production tile_edges_tex indirection.
+    const [aTile, bTile] = orderedTiles(txA, tyA, txB, tyB);
+    const geoA = { u: aTile.tx + 0.5, v: aTile.ty + 0.5 };
+    const geoB = { u: bTile.tx + 0.5, v: bTile.ty + 0.5 };
+    const cA = getCenter(aTile.tx, aTile.ty);
+    const cB = getCenter(bTile.tx, bTile.ty);
+    const signFrame = edgeFrame(geoA, geoB);
+    const result = needsPath ? solveCorridor(geoA, geoB, cA, cB) : { points: [], metaA: cA, metaB: cB };
+    const fwdData = needsPath
+      ? buildPathEdgeData(result.metaA, result.metaB, result.points, NUM_BUCKETS)
+      : buildStraightEdgeData(result.metaA, result.metaB, NUM_BUCKETS);
+
+    edgeCache[key] = {
+      aTile,
+      bTile,
+      needsPath,
+      path: needsPath ? result.points : [],
+      fwdData,
+      signFrame,
+    };
+    return edgeCache[key];
+  }
+
+  function buildTileSample(tx, ty) {
+    const cornerStone = [
+      vertStone(tx, ty + 1),     // BL
+      vertStone(tx + 1, ty + 1), // BR
+      vertStone(tx + 1, ty),     // TR
+      vertStone(tx, ty),         // TL
+    ];
+    const cornerUVs = [[tx, ty + 1], [tx + 1, ty + 1], [tx + 1, ty], [tx, ty]];
+    const edgeData = [];
+    const paths = [];
+    const transitionEdges = [];
+
+    for (let e = 0; e < 4; e++) {
+      const ntx = tx + EDGE_DIRS[e][0], nty = ty + EDGE_DIRS[e][1];
+      const needsPath = edgeNeedsPath(cornerStone, e);
+      // Only stone/grass boundary edges participate in the mask solve.
+      if (!needsPath) {
+        edgeData.push(null);
+        paths.push([]);
+        transitionEdges.push(false);
+        continue;
       }
-      return { u: bu, v: bv };
-    }
-    function solveCorridor(cA, cB) {
-      const du = cB.u - cA.u, dv = cB.v - cA.v;
-      const len = Math.sqrt(du * du + dv * dv);
-      if (len < 0.001) return { points: [], sRangeMin: 0 };
-      const tx = du / len, ty = dv / len, nx = -ty, ny = tx;
-      const halfW = 64 / HS, pad = 4 / HS;
-      const cost = new Float32Array(ECW * ECH), dist = new Float32Array(ECW * ECH).fill(1e10);
-      const pred = new Int32Array(ECW * ECH).fill(-1), cellUV = new Float32Array(ECW * ECH * 2);
-      for (let cy = 0; cy < ECH; cy++) for (let cx = 0; cx < ECW; cx++) {
-        const s = cx / (ECW - 1), t = (cy / (ECH - 1) - 0.5) * 2;
-        const u = cA.u + tx * (s * (len + 2 * pad) - pad) + nx * t * halfW;
-        const v = cA.v + ty * (s * (len + 2 * pad) - pad) + ny * t * halfW;
-        const ci = cy * ECW + cx;
-        cost[ci] = crackCost(u, v); cellUV[ci * 2] = u; cellUV[ci * 2 + 1] = v;
+      const edge = getSharedEdge(tx, ty, ntx, nty, true);
+      if (!edge.fwdData) {
+        edgeData.push(null);
+        paths.push([]);
+        transitionEdges.push(false);
+        continue;
       }
-      const srcFx = pad / (len + 2 * pad) * (ECW - 1);
-      const srcX = Math.round(srcFx), srcY = Math.floor(ECH / 2);
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const sx = srcX + dx, sy = srcY + dy;
-        if (sx >= 0 && sx < ECW && sy >= 0 && sy < ECH) {
-          dist[sy * ECW + sx] = Math.sqrt(dx * dx + dy * dy) * cost[sy * ECW + sx];
-          pred[sy * ECW + sx] = sy * ECW + sx;
-        }
-      }
-      const sinkX = Math.round((len + pad) / (len + 2 * pad) * (ECW - 1));
-      for (let pass = 0; pass < ECW + ECH; pass++) {
-        let changed = false;
-        for (let y = 0; y < ECH; y++) for (let x = 0; x < ECW; x++) {
-          const idx = y * ECW + x, sc = cost[idx];
-          for (let n = 0; n < 8; n++) {
-            const bx = x + NBRS[n][0], by = y + NBRS[n][1];
-            if (bx < 0 || bx >= ECW || by < 0 || by >= ECH) continue;
-            const nIdx = by * ECW + bx, ec = NLEN[n] * 0.5 * (sc + cost[nIdx]);
-            const cand = dist[nIdx] + ec;
-            if (cand < dist[idx] - 0.001) { dist[idx] = cand; pred[idx] = nIdx; changed = true; }
-          }
-        }
-        if (!changed) break;
-      }
-      let bestIdx = Math.floor(ECH / 2) * ECW + sinkX, bestD = dist[bestIdx];
-      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
-        const sx = sinkX + dx, sy = Math.floor(ECH / 2) + dy;
-        if (sx >= 0 && sx < ECW && sy >= 0 && sy < ECH && dist[sy * ECW + sx] < bestD) {
-          bestD = dist[sy * ECW + sx]; bestIdx = sy * ECW + sx;
-        }
-      }
-      const pathIndices = []; let cur = bestIdx;
-      for (let i = 0; i < ECW * ECH; i++) { pathIndices.push(cur); const p = pred[cur]; if (p < 0 || p === cur) break; cur = p; }
-      pathIndices.reverse();
-      const invLen = 1 / len; let sMin = 1.0;
-      const points = pathIndices.map(idx => {
-        const pu = cellUV[idx * 2], pv = cellUV[idx * 2 + 1];
-        sMin = Math.min(sMin, ((pu - cA.u) * tx + (pv - cA.v) * ty) * invLen);
-        return { u: pu, v: pv };
-      });
-      return { points, sRangeMin: sMin };
+      const isForward = edge.aTile.tx === tx && edge.aTile.ty === ty;
+      const path = edge.needsPath ? (isForward ? edge.path : [...edge.path].reverse()) : [];
+      const sref = signedEdgeRefForCorner(edge.signFrame || edge.fwdData, cornerUVs[sectorCorner[e]]);
+      edgeData.push(withSignedRef(edge.fwdData, sref));
+      paths.push(path);
+      transitionEdges.push(needsPath);
     }
 
-    function vertStone(vx, vy) {
-      if (vx === 0 || vx === tilesX || vy === 0 || vy === tilesY) return 0;
-      return 1;
-    }
+    return {
+      edgeData,
+      paths,
+      transitionEdges,
+      cornerStone,
+      sectorCorner,
+      NUM_BUCKETS,
+    };
+  }
 
-    const centers = [];
-    for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) {
-      centers.push(snapCrack(tx + 0.5, ty + 0.5));
-    }
-    function getCenter(tx, ty) {
-      if (tx < 0 || tx >= tilesX || ty < 0 || ty >= tilesY) return snapCrack(tx + 0.5, ty + 0.5);
-      return centers[ty * tilesX + tx];
-    }
-
-    // Build tUpper table from path points in forward direction (cA→cB)
-    function buildFwdEdgeData(cA, cB, pts, sRangeMin) {
-      const du = cB.u - cA.u, dv = cB.v - cA.v, len = Math.sqrt(du*du + dv*dv);
-      if (len < 0.001 || pts.length < 2) return null;
-      const ttx = du/len, tty = dv/len, nx = -tty, ny = ttx, invLen = 1/len;
-      const tUpper = new Float32Array(NUM_BUCKETS).fill(-1e10);
-      for (let i = 0; i < pts.length - 1; i++) {
-        let sA = ((pts[i].u - cA.u)*ttx + (pts[i].v - cA.v)*tty)*invLen;
-        let tA = (pts[i].u - cA.u)*nx + (pts[i].v - cA.v)*ny;
-        let sB = ((pts[i+1].u - cA.u)*ttx + (pts[i+1].v - cA.v)*tty)*invLen;
-        let tB = (pts[i+1].u - cA.u)*nx + (pts[i+1].v - cA.v)*ny;
-        if (sA > sB) { let tmp=sA; sA=sB; sB=tmp; tmp=tA; tA=tB; tB=tmp; }
-        const bLo = Math.max(0, Math.min(NUM_BUCKETS-1, Math.floor(sA*(NUM_BUCKETS-1))));
-        const bHi = Math.max(0, Math.min(NUM_BUCKETS-1, Math.ceil(sB*(NUM_BUCKETS-1))));
-        const ds = Math.max(sB - sA, 1e-8);
-        for (let b = bLo; b <= bHi; b++) {
-          const sAt = b / (NUM_BUCKETS-1), frac = Math.max(0, Math.min(1, (sAt - sA)/ds));
-          const tAt = tA + (tB - tA)*frac;
-          if (tAt > tUpper[b]) tUpper[b] = tAt;
-        }
-      }
-      for (let b = 0; b < NUM_BUCKETS; b++) {
-        if (tUpper[b] > -1e9) continue;
-        let left = b-1; while (left >= 0 && tUpper[left] <= -1e9) left--;
-        let right = b+1; while (right < NUM_BUCKETS && tUpper[right] <= -1e9) right++;
-        if (left < 0 && right >= NUM_BUCKETS) tUpper[b] = 0;
-        else if (left < 0) tUpper[b] = tUpper[right];
-        else if (right >= NUM_BUCKETS) tUpper[b] = tUpper[left];
-        else tUpper[b] = tUpper[left] + (tUpper[right] - tUpper[left])*(b - left)/(right - left);
-      }
-      tUpper[0] = 0; tUpper[NUM_BUCKETS-1] = 0;
-      return { tx: ttx, ty: tty, nx, ny, invLen, tUpper, cA, sRangeMin };
-    }
-
-    const edgeKey = (tx1, ty1, tx2, ty2) => `${Math.min(tx1,tx2)},${Math.min(ty1,ty2)},${tx1===tx2?'v':'h'}`;
-    const edgeCache = {};
-    function getEdgePath(txA, tyA, txB, tyB) {
-      const key = edgeKey(txA, tyA, txB, tyB);
-      if (edgeCache[key]) return edgeCache[key];
-      const cA = getCenter(txA, tyA), cB = getCenter(txB, tyB);
-      const result = solveCorridor(cA, cB);
-      const fwdData = buildFwdEdgeData(cA, cB, result.points, result.sRangeMin);
-      edgeCache[key] = { cA, cB, result, fwdData };
-      return edgeCache[key];
-    }
-
-    const eDirs = [[0,1],[1,0],[0,-1],[-1,0]];
-
+  function render() {
     const tileData = [];
     for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) {
-      const cs = [
-        vertStone(tx, ty + 1), vertStone(tx + 1, ty + 1),
-        vertStone(tx + 1, ty), vertStone(tx, ty)
-      ];
-      const center = getCenter(tx, ty);
-      const edgeData = [];
-      const paths = [];
-      for (let e = 0; e < 4; e++) {
-        const ntx = tx + eDirs[e][0], nty = ty + eDirs[e][1];
-        const edge = getEdgePath(tx, ty, ntx, nty);
-        const isForward = edge.cA.u === center.u && edge.cA.v === center.v;
-        paths.push(isForward ? edge.result.points : [...edge.result.points].reverse());
-
-        if (!edge.fwdData) { edgeData.push(null); continue; }
-
-        // Both tiles sharing an edge use the SAME forward-direction tUpper
-        // table. Only sref differs — computed from this tile's sector corner.
-        // This eliminates discretization disagreement at tile boundaries.
-        const fe = edge.fwdData;
-        const cornerUVs = [[tx, ty+1],[tx+1, ty+1],[tx+1, ty],[tx, ty]];
-        const cu = cornerUVs[sectorCorner[e]];
-        const csProj = ((cu[0] - fe.cA.u)*fe.tx + (cu[1] - fe.cA.v)*fe.ty)*fe.invLen;
-        const ctProj = (cu[0] - fe.cA.u)*fe.nx + (cu[1] - fe.cA.v)*fe.ny;
-        const csc = Math.max(0, Math.min(1, csProj));
-        const bf = csc*(NUM_BUCKETS-1), b0 = Math.floor(bf), b1 = Math.min(b0+1, NUM_BUCKETS-1);
-        const pathT = fe.tUpper[b0] + (fe.tUpper[b1] - fe.tUpper[b0])*(bf - b0);
-        const sref = (ctProj - pathT) >= 0 ? 1 : -1;
-        edgeData.push({ tx: fe.tx, ty: fe.ty, nx: fe.nx, ny: fe.ny, invLen: fe.invLen, tUpper: fe.tUpper, sref, cA: fe.cA, sRangeMin: fe.sRangeMin });
-      }
-      tileData.push({ center, edgeData, paths, cornerStone: cs, sectorCorner, NUM_BUCKETS: NUM_BUCKETS });
+      tileData.push(buildTileSample(tx, ty));
     }
 
     const rawMask = new Float32Array(MW * MH);
@@ -2892,10 +3005,8 @@ slideInits[14] = function initFinal() {
       ctx.save();
       ctx.beginPath(); ctx.rect(tx/tilesX*W, ty/tilesY*H, W/tilesX, H/tilesY); ctx.clip();
       for (let e = 0; e < 4; e++) {
-        const p = td.paths[e];
-        if (!p || p.length < 2) continue;
-        const corner = sectorCorner[e], prevCorner = sectorCorner[(e+3)%4];
-        if (td.cornerStone[corner] === td.cornerStone[prevCorner]) continue;
+        const p = edgeBoundaryPoints(td.edgeData[e], td.NUM_BUCKETS);
+        if (!td.transitionEdges[e] || !p || p.length < 2) continue;
         ctx.beginPath();
         for (let i = 0; i < p.length; i++) {
           const sx = p[i].u / tilesX * W, sy = p[i].v / tilesY * H;
