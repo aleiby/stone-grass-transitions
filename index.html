@@ -861,8 +861,8 @@ slideInits[1] = function initMotivation() {
       const sx = Math.floor(u * HS), sy = Math.floor(v * HS);
       const idx = sy * HS + sx;
       const hv = height[idx];
-      const s0 = (u + (1 - v)) / 2;
-      const stone = smoothstep(0.3, 0.7, s0);
+      const s0 = Math.min(u - 0.4, 0.6 - v);
+      const stone = smoothstep(-0.05, 0.05, s0);
       const ai = idx * 3;
       const stR = texturesReady ? albedo[ai] : (hv * 160 + 40);
       const stG = texturesReady ? albedo[ai+1] : (hv * 140 + 35);
@@ -884,28 +884,6 @@ slideInits[1] = function initMotivation() {
   function drawRight() {
     const cv = document.getElementById('cv-crackfollow');
     const ctx = cv.getContext('2d');
-    const img = ctx.createImageData(S, S);
-
-    // Draw stone texture with crack overlay
-    for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
-      const u = px / S, v = py / S;
-      const sx = Math.floor(u * HS), sy = Math.floor(v * HS);
-      const idx = sy * HS + sx;
-      const hv = height[idx];
-      const depth = blur[idx] - hv;
-      const inCrack = smoothstep(0.01, 0.09, depth);
-      const ai = idx * 3;
-      const aR = texturesReady ? albedo[ai] : (hv * 160 + 40);
-      const aG = texturesReady ? albedo[ai+1] : (hv * 140 + 35);
-      const aB = texturesReady ? albedo[ai+2] : (hv * 130 + 30);
-      const i = (py * S + px) * 4;
-      // Tint cracks green to show detection
-      img.data[i]   = aR * (1 - inCrack * 0.5);
-      img.data[i+1] = aG * (1 - inCrack * 0.3) + inCrack * 60;
-      img.data[i+2] = aB * (1 - inCrack * 0.5);
-      img.data[i+3] = 255;
-    }
-    ctx.putImageData(img, 0, 0);
 
     // Crack snapping with wrapped texture sampling
     function snapToNearestCrack(geoCU, geoCV) {
@@ -930,17 +908,18 @@ slideInits[1] = function initMotivation() {
       return { u: bestU, v: bestV };
     }
 
-    // Snap this tile's center
-    const center = snapToNearestCrack(0.5, 0.5);
+    // Snap this tile's center (shifted SW for demo)
+    const geoU = 0.4, geoV = 0.6;
+    const center = snapToNearestCrack(geoU, geoV);
     const snapX = center.u * S, snapY = center.v * S;
-    const gcx = S / 2, gcy = S / 2;
+    const gcx = geoU * S, gcy = geoV * S;
 
     // Snap 4 neighbor centers (S, E, N, W) — placed 1 tile-width away
     const neighborGeo = [
-      { u: 0.5, v: 1.5 },   // S
-      { u: 1.5, v: 0.5 },   // E
-      { u: 0.5, v: -0.5 },  // N
-      { u: -0.5, v: 0.5 },  // W
+      { u: geoU, v: geoV + 1 },   // S
+      { u: geoU + 1, v: geoV },   // E
+      { u: geoU, v: geoV - 1 },   // N
+      { u: geoU - 1, v: geoV },   // W
     ];
     const neighborSnapped = neighborGeo.map(g => snapToNearestCrack(g.u, g.v));
     const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e'];
@@ -964,9 +943,9 @@ slideInits[1] = function initMotivation() {
       const len = Math.sqrt(du * du + dv * dv);
       if (len < 0.001) return [];
       const tx = du / len, ty = dv / len, nx = -ty, ny = tx;
-      const corridorPadUV = 16 / HS;
-      const halfW = Math.max(corridorPadUV, 2 / HS);
-      const pad = corridorPadUV;
+      const corridorPadUV = 64 / HS;
+      const halfW = corridorPadUV;
+      const pad = 4 / HS;
 
       const cost = new Float32Array(ECW * ECH);
       const dist = new Float32Array(ECW * ECH).fill(1e10);
@@ -998,7 +977,7 @@ slideInits[1] = function initMotivation() {
       const sinkFx = (len + pad) / (len + 2 * pad) * (ECW - 1);
       const sinkX = Math.round(sinkFx), sinkY = Math.floor(ECH / 2);
 
-      for (let pass = 0; pass < 50; pass++) {
+      for (let pass = 0; pass < ECW + ECH; pass++) {
         let changed = false;
         for (let y = 0; y < ECH; y++) for (let x = 0; x < ECW; x++) {
           const idx = y * ECW + x;
@@ -1043,41 +1022,120 @@ slideInits[1] = function initMotivation() {
       solveCorridor({ u: center.u, v: center.v }, { u: n.u, v: n.v })
     );
 
+    // Build t_upper offset tables from paths (matches GPU traceback)
+    const NUM_BUCKETS = 64;
+    const sectorCorner = [1, 2, 3, 0];
+    const cornerStone = [0, 0, 1, 0]; // BL=grass, BR=grass, TR=stone, TL=grass
+    const cornerUVs = [[0, 1], [1, 1], [1, 0], [0, 0]]; // BL, BR, TR, TL in v-down UV
+
+    const edgeData = [];
     for (let e = 0; e < 4; e++) {
-      ctx.beginPath();
-      for (let p = 0; p < paths[e].length; p++) {
-        const pt = paths[e][p];
-        if (p === 0) ctx.moveTo(pt.px, pt.py); else ctx.lineTo(pt.px, pt.py);
+      const cA = center, cB = neighborSnapped[e];
+      const du = cB.u - cA.u, dv = cB.v - cA.v;
+      const len = Math.sqrt(du * du + dv * dv);
+      if (len < 0.001 || !paths[e] || paths[e].length < 2) { edgeData.push(null); continue; }
+      const tx = du / len, ty = dv / len, nx = -ty, ny = tx;
+      const invLen = 1 / len;
+
+      const tUpper = new Float32Array(NUM_BUCKETS).fill(-1e10);
+      const p = paths[e];
+      for (let i = 0; i < p.length - 1; i++) {
+        const aU = p[i].px / S, aV = p[i].py / S;
+        const bU = p[i + 1].px / S, bV = p[i + 1].py / S;
+        let sA = ((aU - cA.u) * tx + (aV - cA.v) * ty) * invLen;
+        let tA = (aU - cA.u) * nx + (aV - cA.v) * ny;
+        let sB = ((bU - cA.u) * tx + (bV - cA.v) * ty) * invLen;
+        let tB = (bU - cA.u) * nx + (bV - cA.v) * ny;
+        if (sA > sB) { let tmp = sA; sA = sB; sB = tmp; tmp = tA; tA = tB; tB = tmp; }
+        const bLo = Math.max(0, Math.min(NUM_BUCKETS - 1, Math.floor(sA * (NUM_BUCKETS - 1))));
+        const bHi = Math.max(0, Math.min(NUM_BUCKETS - 1, Math.ceil(sB * (NUM_BUCKETS - 1))));
+        const ds = Math.max(sB - sA, 1e-8);
+        for (let b = bLo; b <= bHi; b++) {
+          const sAt = b / (NUM_BUCKETS - 1);
+          const frac = Math.max(0, Math.min(1, (sAt - sA) / ds));
+          const tAt = tA + (tB - tA) * frac;
+          if (tAt > tUpper[b]) tUpper[b] = tAt;
+        }
       }
-      ctx.strokeStyle = edgeColors[e]; ctx.lineWidth = 2.5; ctx.globalAlpha = 0.8;
-      ctx.stroke(); ctx.globalAlpha = 1;
+      for (let b = 0; b < NUM_BUCKETS; b++) {
+        if (tUpper[b] > -1e9) continue;
+        let left = b - 1; while (left >= 0 && tUpper[left] <= -1e9) left--;
+        let right = b + 1; while (right < NUM_BUCKETS && tUpper[right] <= -1e9) right++;
+        if (left < 0 && right >= NUM_BUCKETS) tUpper[b] = 0;
+        else if (left < 0) tUpper[b] = tUpper[right];
+        else if (right >= NUM_BUCKETS) tUpper[b] = tUpper[left];
+        else tUpper[b] = tUpper[left] + (tUpper[right] - tUpper[left]) * (b - left) / (right - left);
+      }
+      tUpper[0] = 0;
+      tUpper[NUM_BUCKETS - 1] = 0;
 
-      // Edge label where path exits canvas
-      const last = paths[e][paths[e].length - 1];
-      const labelPt = paths[e][Math.min(paths[e].length - 1, Math.max(0, paths[e].length - 8))];
-      const lx = Math.max(12, Math.min(S - 12, last.px));
-      const ly = Math.max(12, Math.min(S - 12, last.py));
-      ctx.fillStyle = edgeColors[e]; ctx.font = 'bold 11px monospace';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(edgeLabels[e], lx, ly);
+      const cu = cornerUVs[sectorCorner[e]];
+      const cs = ((cu[0] - cA.u) * tx + (cu[1] - cA.v) * ty) * invLen;
+      const ct = (cu[0] - cA.u) * nx + (cu[1] - cA.v) * ny;
+      const csc = Math.max(0, Math.min(1, cs));
+      const bf = csc * (NUM_BUCKETS - 1);
+      const b0 = Math.floor(bf), b1 = Math.min(b0 + 1, NUM_BUCKETS - 1);
+      const pathT = tUpper[b0] + (tUpper[b1] - tUpper[b0]) * (bf - b0);
+      const sref = (ct - pathT) >= 0 ? 1 : -1;
+
+      edgeData.push({ tx, ty, nx, ny, invLen, tUpper, sref, cA });
     }
 
-    // Dashed arrow from geometric to snapped center
-    if (Math.hypot(snapX - gcx, snapY - gcy) > 2) {
-      ctx.beginPath(); ctx.moveTo(gcx, gcy); ctx.lineTo(snapX, snapY);
-      ctx.strokeStyle = '#ffffffa0'; ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]);
+    // Per-pixel flap folding classification
+    const mask = new Float32Array(S * S);
+    for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
+      const u = px / S, v = py / S;
+      const rawSides = [0, 0, 0, 0];
+      const sLocal = [0, 0, 0, 0];
+      for (let e = 0; e < 4; e++) {
+        const ed = edgeData[e];
+        if (!ed) { rawSides[e] = 0; sLocal[e] = -999; continue; }
+        const du2 = u - ed.cA.u, dv2 = v - ed.cA.v;
+        const s = (du2 * ed.tx + dv2 * ed.ty) * ed.invLen;
+        const t = du2 * ed.nx + dv2 * ed.ny;
+        const sc = Math.max(0, Math.min(1, s));
+        const bf = sc * (NUM_BUCKETS - 1);
+        const b0 = Math.floor(bf), b1 = Math.min(b0 + 1, NUM_BUCKETS - 1);
+        const pathT = ed.tUpper[b0] + (ed.tUpper[b1] - ed.tUpper[b0]) * (bf - b0);
+        rawSides[e] = (t - pathT) * ed.sref;
+        sLocal[e] = s;
+      }
+      let assigned = 0;
+      for (let i = 1; i < 4; i++) {
+        if (rawSides[i] <= 0) continue;
+        const newInRange = sLocal[i] > 0;
+        const curInRange = sLocal[assigned] > 0 && rawSides[assigned] > 0;
+        if (!newInRange && curInRange) continue;
+        if (i === 3 && assigned === 0 && rawSides[0] > 0) continue;
+        assigned = i;
+      }
+      mask[py * S + px] = cornerStone[sectorCorner[assigned]];
     }
 
-    // Geometric center (red)
-    ctx.beginPath(); ctx.arc(gcx, gcy, 6, 0, Math.PI * 2);
-    ctx.fillStyle = '#f8514990'; ctx.fill();
-    ctx.strokeStyle = '#f85149'; ctx.lineWidth = 2; ctx.stroke();
+    // Blur mask for smooth transition (matches GPU separable Gaussian)
+    const blurredMask = gaussBlur(mask, S, S, 8);
 
-    // Snapped center (green)
-    ctx.beginPath(); ctx.arc(snapX, snapY, 6, 0, Math.PI * 2);
-    ctx.fillStyle = '#3fb95090'; ctx.fill();
-    ctx.strokeStyle = '#3fb950'; ctx.lineWidth = 2; ctx.stroke();
+    // Render stone/grass blend
+    const img = ctx.createImageData(S, S);
+    for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
+      const u = px / S, v = py / S;
+      const stone = blurredMask[py * S + px];
+      const sx = Math.floor(u * HS), sy = Math.floor(v * HS);
+      const idx = sy * HS + sx;
+      const ai = idx * 3;
+      const stR = texturesReady ? albedo[ai] : (height[idx] * 160 + 40);
+      const stG = texturesReady ? albedo[ai + 1] : (height[idx] * 140 + 35);
+      const stB = texturesReady ? albedo[ai + 2] : (height[idx] * 130 + 30);
+      const gR = 55 + fbm(u * 10, v * 10, 2, 99) * 30;
+      const gG = 120 + fbm(u * 10, v * 10, 2, 100) * 40;
+      const gB = 30 + fbm(u * 10, v * 10, 2, 101) * 20;
+      const i = (py * S + px) * 4;
+      img.data[i] = stone * stR + (1 - stone) * gR;
+      img.data[i + 1] = stone * stG + (1 - stone) * gG;
+      img.data[i + 2] = stone * stB + (1 - stone) * gB;
+      img.data[i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
 
     ctx.strokeStyle = '#30363d'; ctx.lineWidth = 2;
     ctx.strokeRect(0, 0, S, S);
