@@ -23,7 +23,13 @@ html, body { width:100%; height:100%; overflow:hidden; background:var(--bg); col
   position:absolute; inset:0; display:flex; flex-direction:column;
   justify-content:center; align-items:center; padding:3vh 5vw;
   opacity:0; pointer-events:none; transition: opacity 0.4s ease;
+  background: url('images/hero-screenshot.png') center/cover no-repeat;
 }
+.slide::before {
+  content:''; position:absolute; inset:0;
+  background:rgba(13,17,23,0.82); pointer-events:none;
+}
+.slide > * { position:relative; }
 .slide.active { opacity:1; pointer-events:auto; }
 
 h1 { font-size:clamp(1.8rem,3.5vw,3.2rem); font-weight:700; line-height:1.15; text-align:center; margin-bottom:0.4em; color:var(--fg); }
@@ -136,18 +142,15 @@ pre .str { color:var(--green); } pre .type { color:var(--cyan); }
 <div class="slides" id="slides">
 
 <!-- ==================== SLIDE 0: TITLE ==================== -->
-<section class="slide" id="s-title" style="background:url('images/hero-screenshot.png') center/cover no-repeat;">
-  <div style="position:absolute;inset:0;background:rgba(13,17,23,0.78);"></div>
-  <div style="position:relative;display:flex;flex-direction:column;align-items:center;">
-    <h1>Stone–Grass Transitions via<br>Crack-Following Paths</h1>
-    <p class="subtitle">On Irregular Dual Grids</p>
-    <p style="text-align:center; color:var(--fg3); font-size:0.9rem; margin-top:1em;">
-      An engine-agnostic technique for natural material boundaries<br>
-      that follow features in the underlying stone texture
-    </p>
-    <div style="margin-top:2em; text-align:center;">
-      <p class="small">Use <kbd style="background:var(--bg3);padding:0.15em 0.5em;border-radius:3px;">&#8592;</kbd> <kbd style="background:var(--bg3);padding:0.15em 0.5em;border-radius:3px;">&#8594;</kbd> to navigate</p>
-    </div>
+<section class="slide" id="s-title">
+  <h1>Stone–Grass Transitions via<br>Crack-Following Paths</h1>
+  <p class="subtitle">On Irregular Dual Grids</p>
+  <p style="text-align:center; color:var(--fg3); font-size:0.9rem; margin-top:1em;">
+    An engine-agnostic technique for natural material boundaries<br>
+    that follow features in the underlying stone texture
+  </p>
+  <div style="margin-top:2em; text-align:center;">
+    <p class="small">Use <kbd style="background:var(--bg3);padding:0.15em 0.5em;border-radius:3px;">&#8592;</kbd> <kbd style="background:var(--bg3);padding:0.15em 0.5em;border-radius:3px;">&#8594;</kbd> to navigate</p>
   </div>
 </section>
 
@@ -481,7 +484,7 @@ corner = sector_corner[assigned];
     </div>
   </div>
   <div class="controls" style="max-width:500px;">
-    <label>blur radius <input type="range" id="sl-mask-blur" min="0" max="12" step="1" value="4"><span class="val" id="v-mask-blur">4</span></label>
+    <label>blur radius <input type="range" id="sl-mask-blur" min="0" max="32" step="1" value="8"><span class="val" id="v-mask-blur">8</span></label>
     <button id="btn-mask-regen">Regenerate</button>
   </div>
   <div class="key-insight mt-1">
@@ -2552,123 +2555,53 @@ slideInits[10] = function initDomainGuards() {
 // ============================================================
 slideInits[11] = function initMask() {
 
-  const SIZE = 128, CSIZE = 260;
-  let seed = 55;
+  const CSIZE = 260;
+  let td = buildTileData(55, 0.4, 0.6, [0, 0, 0, 1]);
+  const HS = td.HS;
 
   function genMask() {
-    seed = Math.floor(Math.random() * 10000);
-    const height = generateStoneHeight(SIZE, SIZE, seed);
-    const albedoM = generateStoneAlbedo(SIZE, SIZE, seed);
-    const blurred = boxBlur(height, SIZE, SIZE, 4);
-
-    // Create 4 paths (simulated crack-following edge paths)
-    const paths = [];
-    for (let e = 0; e < 4; e++) {
-      const pts = [];
-      for (let i = 0; i <= 32; i++) {
-        const t = i / 32;
-        let bx, by, nx, ny;
-        if (e === 0) { bx = t; by = 0; nx = 0; ny = 1; }
-        else if (e === 1) { bx = 1; by = t; nx = -1; ny = 0; }
-        else if (e === 2) { bx = 1 - t; by = 1; nx = 0; ny = -1; }
-        else { bx = 0; by = 1 - t; nx = 1; ny = 0; }
-
-        // Sample crack field for wobble
-        const su = Math.floor(bx * SIZE), sv = Math.floor(by * SIZE);
-        const idx = Math.max(0, Math.min(SIZE * SIZE - 1, sv * SIZE + su));
-        const depth = blurred[idx] - height[idx];
-        const wobble = depth * 1.5 + Math.sin(t * Math.PI * 3 + e * 2.1) * 0.08;
-        pts.push({ x: bx + nx * (0.5 + wobble * 0.3), y: by + ny * (0.5 + wobble * 0.3) });
-      }
-      paths.push(pts);
-    }
-
-    function sideOfPath(pathIdx, px, py) {
-      const pts = paths[pathIdx];
-      let bestDist = Infinity, bestSide = 0;
-      for (let i = 0; i < pts.length - 1; i++) {
-        const ax = pts[i].x, ay = pts[i].y, bx = pts[i + 1].x, by = pts[i + 1].y;
-        const dx = bx - ax, dy = by - ay;
-        const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
-        const cx2 = ax + t * dx, cy2 = ay + t * dy;
-        const dist = Math.sqrt((px - cx2) ** 2 + (py - cy2) ** 2);
-        const side = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-        if (dist < bestDist) { bestDist = dist; bestSide = side; }
-      }
-      return bestSide;
-    }
-
-    const sectorCorner = [1, 2, 3, 0];
-    const cornerStone = [0, 1, 1, 0]; // BL=grass, BR=stone, TR=stone, TL=grass
-
-    // Raw classification mask
-    const rawMask = new Float32Array(SIZE * SIZE);
-    for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
-      const u = x / SIZE, v = y / SIZE;
-      const sides = [];
-      for (let e = 0; e < 4; e++) sides.push(sideOfPath(e, u, v));
-      let assigned = 0;
-      for (let i = 1; i < 4; i++) {
-        if (sides[i] <= 0) continue;
-        if (i === 3 && assigned === 0 && sides[0] > 0) continue;
-        assigned = i;
-      }
-      rawMask[y * SIZE + x] = cornerStone[sectorCorner[assigned]];
+    const rawMask = new Float32Array(HS * HS);
+    for (let y = 0; y < HS; y++) for (let x = 0; x < HS; x++) {
+      const u = x / HS, v = y / HS;
+      const r = classifyPixel(u, v, td, { domainGuard: true, wrapGuard: true, useSRangeMin: true });
+      rawMask[y * HS + x] = td.cornerStone[r.corner];
     }
 
     const blurRadius = parseInt(document.getElementById('sl-mask-blur').value);
-    const blurredMask = gaussBlur(rawMask, SIZE, SIZE, blurRadius);
+    const blurredMask = gaussBlur(rawMask, HS, HS, blurRadius);
 
-    // Draw raw
     drawHeatmap(
       document.getElementById('cv-mask-raw').getContext('2d'),
-      rawMask, SIZE, SIZE, CSIZE, CSIZE,
-      (v, sx, sy) => {
-        if (v > 0.5) {
-          const ai = (sy * SIZE + sx) * 3;
-          return texturesReady ? [albedoM[ai], albedoM[ai+1], albedoM[ai+2]] : [180, 170, 155];
-        }
-        return [55, 130, 35];
-      }
+      rawMask, HS, HS, CSIZE, CSIZE,
+      (v) => [v * 255, 0, 0]
     );
 
-    // Draw blurred
     drawHeatmap(
       document.getElementById('cv-mask-blur').getContext('2d'),
-      blurredMask, SIZE, SIZE, CSIZE, CSIZE,
-      (v, sx, sy) => {
-        const s = smoothstep(0.2, 0.8, v);
-        const ai = (sy * SIZE + sx) * 3;
-        const stR = texturesReady ? albedoM[ai] : 180, stG = texturesReady ? albedoM[ai+1] : 170, stB = texturesReady ? albedoM[ai+2] : 155;
-        return [s * stR + (1 - s) * 55, s * stG + (1 - s) * 130, s * stB + (1 - s) * 35];
-      }
+      blurredMask, HS, HS, CSIZE, CSIZE,
+      (v) => [v * 255, 0, 0]
     );
 
-    // Draw applied
     const ctx = document.getElementById('cv-mask-applied').getContext('2d');
     const img = ctx.createImageData(CSIZE, CSIZE);
     for (let py = 0; py < CSIZE; py++) for (let px = 0; px < CSIZE; px++) {
       const u = px / CSIZE, v = py / CSIZE;
-      const sx = Math.floor(u * SIZE), sy = Math.floor(v * SIZE);
-      const idx = sy * SIZE + sx;
+      const sx = Math.floor(u * HS), sy = Math.floor(v * HS);
+      const idx = sy * HS + sx;
       const stone = smoothstep(0.2, 0.8, blurredMask[idx]);
-      const hv = height[idx];
-      const depth = blurred[idx] - hv;
-      const moss = smoothstep(0.02, 0.1, depth) * stone * 0.4;
 
-      const ami = idx * 3;
-      const stR = texturesReady ? albedoM[ami] : (hv * 160 + 40), stG = texturesReady ? albedoM[ami+1] : (hv * 140 + 35), stB = texturesReady ? albedoM[ami+2] : (hv * 130 + 30);
-      const mR = stR * (1 - moss) + 45 * moss;
-      const mG = stG * (1 - moss) + 76 * moss;
-      const mB = stB * (1 - moss) + 30 * moss;
+      const ai = idx * 3;
+      const stR = texturesReady ? td.albedo[ai] : (td.height[idx] * 160 + 40);
+      const stG = texturesReady ? td.albedo[ai+1] : (td.height[idx] * 140 + 35);
+      const stB = texturesReady ? td.albedo[ai+2] : (td.height[idx] * 130 + 30);
       const gR = 55 + fbm(u * 12, v * 12, 2, 99) * 30;
       const gG = 120 + fbm(u * 12, v * 12, 2, 100) * 40;
       const gB = 30 + fbm(u * 12, v * 12, 2, 101) * 20;
 
       const i = (py * CSIZE + px) * 4;
-      img.data[i] = mR * stone + gR * (1 - stone);
-      img.data[i + 1] = mG * stone + gG * (1 - stone);
-      img.data[i + 2] = mB * stone + gB * (1 - stone);
+      img.data[i]     = stR * stone + gR * (1 - stone);
+      img.data[i + 1] = stG * stone + gG * (1 - stone);
+      img.data[i + 2] = stB * stone + gB * (1 - stone);
       img.data[i + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
@@ -2679,7 +2612,10 @@ slideInits[11] = function initMask() {
     document.getElementById('v-mask-blur').textContent = document.getElementById('sl-mask-blur').value;
     genMask();
   };
-  document.getElementById('btn-mask-regen').onclick = genMask;
+  document.getElementById('btn-mask-regen').onclick = () => {
+    td = buildTileData(Math.floor(Math.random() * 10000), 0.4, 0.6, [0, 0, 0, 1]);
+    genMask();
+  };
 };
 
 // ============================================================
