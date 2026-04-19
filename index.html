@@ -951,14 +951,12 @@ function buildPathEdgeData(cA, cB, points, numBuckets) {
   tUpper[0] = 0;
   tUpper[numBuckets - 1] = 0;
 
-  // Pin s range to [0,1] to match the tUpper endpoint pinning above.
-  // The corridor solver can produce paths whose raw s extent goes outside
-  // [0,1].  A negative sRangeMin lets the domain guard treat s<0 pixels
-  // as "in range", and a sRangeMax<1 lets the sref=-1 transform mark
-  // high-s pixels as "out of range" — both allow later edges to overwrite
-  // valid earlier claims in the pinned-endpoint region.
-  sRangeMin = 0;
-  sRangeMax = 1;
+  // The corridor solver's grid quantization can place path endpoints
+  // slightly outside [0,1], giving sRangeMin < 0 or sRangeMax > 1.
+  // The production's wavefront doesn't have this — path_min_s ≈ 0
+  // naturally.  Clamp to [0,1] to match.
+  sRangeMin = Math.max(sRangeMin, 0);
+  sRangeMax = Math.min(sRangeMax, 1);
 
   return {
     ...frame,
@@ -1269,13 +1267,14 @@ function classifyPixel(u, v, td, opts) {
     if (useWrapGuard) {
       if (i === 3 && assigned === 0 && rawSides[0] > 0) continue;
     }
-    // Extent guard: the corridor solver produces wider paths than the
-    // production's wavefront, so edges can have rawSides > 0 far beyond
-    // their [0,1] s-extent via the chord-line extension (tUpper pinned
-    // to 0).  Don't let that extension overwrite an existing real claim.
-    // The production doesn't need this because its wavefront paths are
-    // tighter and rarely extend far beyond [0,1].
-    if ((sRaw[i] < -0.05 || sRaw[i] > 1.05) && rawSides[assigned] > 0) continue;
+    // The corridor solver's paths have more curvature than the production's
+    // wavefront, creating overlap zones where edges claim via chord-line
+    // extension (tUpper pinned to 0) far beyond their [0,1] s-extent.
+    // Block these from overwriting real transition-edge claims.  Non-
+    // transition edges (straight-chord filler) always yield to transition
+    // edges, even at s outside [0,1].
+    const te = td.transitionEdges;
+    if ((sRaw[i] < 0 || sRaw[i] > 1) && rawSides[assigned] > 0 && (!te || te[assigned])) continue;
     assigned = i;
   }
   const corner = td.sectorCorner[assigned];
