@@ -23,6 +23,7 @@ html, body { width:100%; height:100%; overflow:hidden; background:var(--bg); col
   position:absolute; inset:0; display:flex; flex-direction:column;
   justify-content:center; align-items:center; padding:3vh 5vw;
   opacity:0; pointer-events:none; transition: opacity 0.4s ease;
+  overflow-y:auto;
   background: url('images/hero-screenshot.png') center/cover no-repeat;
 }
 .slide::before {
@@ -271,7 +272,7 @@ pre .str { color:var(--green); } pre .type { color:var(--cyan); }
     </div>
   </div>
   <div class="controls" style="max-width:700px;">
-    <label>blur mip <input type="range" id="sl-blur-mip" min="1" max="8" step="0.5" value="4"><span class="val" id="v-blur-mip">4.0</span></label>
+    <label>blur mip <input type="range" id="sl-blur-mip" min="0" max="8" step="0.5" value="4"><span class="val" id="v-blur-mip">4.0</span></label>
     <label>midpoint <input type="range" id="sl-midpoint" min="0" max="0.3" step="0.005" value="0.05"><span class="val" id="v-midpoint">0.05</span></label>
     <label>spread <input type="range" id="sl-spread" min="0.01" max="0.3" step="0.005" value="0.08"><span class="val" id="v-spread">0.08</span></label>
   </div>
@@ -393,13 +394,15 @@ s_local = sref &lt; <span class="num">0</span> ? (<span class="num">1.0</span> -
   <div class="demo-area">
     <div class="demo-panel">
       <canvas id="cv-flaps" width="480" height="480"></canvas>
-      <div class="controls">
-        <button id="btn-flap-step">Step</button>
-        <button id="btn-flap-animate">Play All</button>
-        <button id="btn-flap-regen">New Seed</button>
-        <label>Show paths <input type="checkbox" id="chk-flap-paths" checked></label>
-        <label>t&prime; shading <input type="checkbox" id="chk-flap-tshade"></label>
-        <span id="flap-step-label" style="color:var(--dim);font-size:0.85em;">All edges</span>
+      <div class="controls" style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <div style="display:flex;gap:4px;"><button id="btn-flap-step">Step</button><button id="btn-flap-animate">Play All</button><button id="btn-flap-regen">New Seed</button></div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">
+          <label>Show paths <input type="checkbox" id="chk-flap-paths" checked></label>
+          <label>t&prime; shading <input type="checkbox" id="chk-flap-tshade"></label>
+          <span id="flap-step-label" style="color:var(--dim);font-size:0.85em;min-width:12em;text-align:right;">All edges</span>
+        </div>
       </div>
       <div id="flap-hover-info" style="color:var(--dim);font-size:0.8em;min-height:1.2em;margin-top:4px;"></div>
     </div>
@@ -513,16 +516,7 @@ corner = sector_corner[assigned];
   <span class="fn">mix</span>(corners[<span class="num">3</span>], corners[<span class="num">2</span>], pos.x),
   pos.y);
 </pre>
-      <h3 class="mt-1">Cliff Normals via Jacobian</h3>
-      <pre>
-<span class="cm">// J^{-T} transforms normals through deformation</span>
-<span class="type">vec2</span> dWdx = <span class="fn">mix</span>(c1-c0, c2-c3, pos.y);
-<span class="type">vec2</span> dWdy = <span class="fn">mix</span>(c3-c0, c2-c1, pos.x);
-<span class="type">float</span> det = dWdx.x*dWdy.y - dWdx.y*dWdy.x;
-</pre>
-    </div>
-    <div>
-      <h3>Fragment Shader: Compositing</h3>
+      <h3 class="mt-1">Fragment Shader: Compositing</h3>
       <pre>
 <span class="cm">// 1. Sample the precomputed crack mask</span>
 <span class="type">float</span> stone_raw = <span class="fn">texture</span>(crack_mask_tex, mask_uv).r;
@@ -539,7 +533,9 @@ albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
 <span class="cm">// 4. Blend with grass</span>
 <span class="type">vec3</span> final = <span class="fn">mix</span>(grass_color, albedo, stone);
 </pre>
-      <h3 class="mt-1">GPU Compute Pipeline</h3>
+    </div>
+    <div>
+      <h3>GPU Compute Pipeline</h3>
       <pre>
 <span class="cm">// All dispatched in a single command buffer</span>
 <span class="fn">dispatch</span>(find_centers, tiles, <span class="num">1</span>);      <span class="cm">// snap to cracks</span>
@@ -609,15 +605,18 @@ albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
   <h2>Summary</h2>
   <div class="content-block" style="text-align:center;">
     <canvas id="cv-final" width="700" height="360"></canvas>
-    <p id="final-hover-info" class="small" style="font-family:monospace; min-height:1.2em; color:var(--fg-muted);"></p>
-    <div style="margin-top:1.5em;">
+    <div style="display:flex;justify-content:center;gap:1.5em;margin-top:0.4em;">
+      <label style="font-size:0.85em;"><input type="checkbox" id="chk-final-paths"> Show paths</label>
+      <label style="font-size:0.85em;"><input type="checkbox" id="chk-final-debug"> Show debug</label>
+    </div>
+    <p id="final-hover-info" class="small" style="font-family:monospace; min-height:1.2em; color:var(--fg-muted); text-align:center; display:none;"></p>
+    <div style="margin-top:1em;">
       <p style="font-size:1.1rem; color:var(--fg);">Stone–grass boundaries that follow natural texture features,<br>computed entirely on the GPU at load time.</p>
     </div>
     <div style="display:flex;gap:2em;justify-content:center;margin-top:1.5em;flex-wrap:wrap;">
+      <div style="text-align:center;"><span style="font-size:2rem;color:var(--purple);">0</span><br><span class="small">engine-specific<br>dependencies</span></div>
       <div style="text-align:center;"><span style="font-size:2rem;color:var(--green);">1</span><br><span class="small">texture sample<br>per fragment</span></div>
       <div style="text-align:center;"><span style="font-size:2rem;color:var(--accent);">async</span><br><span class="small">GPU compute<br>at load time</span></div>
-      <div style="text-align:center;"><span style="font-size:2rem;color:var(--purple);">0</span><br><span class="small">engine-specific<br>dependencies</span></div>
-      <div style="text-align:center;"><span style="font-size:2rem;color:var(--cyan);">load&#8209;time</span><br><span class="small">compute<br>once</span></div>
     </div>
   </div>
 </section>
@@ -1596,7 +1595,7 @@ slideInits[4] = function initSurface() {
     // Edge paths (arrows between adjacent tile centers)
     const tileCx = W / 2, tileCy = H / 2;
     const neighborDirs = [[0, 1], [1, 0], [0, -1], [-1, 0]]; // S, E, N, W
-    const edgeNames = ['S', 'E', 'N', 'W'];
+    const edgeNames = ['N', 'E', 'S', 'W'];
     const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e'];
 
     for (let e = 0; e < 4; e++) {
@@ -1918,7 +1917,7 @@ slideInits[6] = function initCenters() {
 
     // Legend
     const lx = 10, ly = 8, lw = 170, lh = 52, lr = 6;
-    ctx.globalAlpha = 0.75;
+    ctx.globalAlpha = 0.55;
     ctx.fillStyle = '#000000';
     ctx.beginPath();
     ctx.moveTo(lx + lr, ly); ctx.lineTo(lx + lw - lr, ly); ctx.quadraticCurveTo(lx + lw, ly, lx + lw, ly + lr);
@@ -3021,30 +3020,38 @@ slideInits[14] = function initFinal() {
     for (let ty = 1; ty < tilesY; ty++) { ctx.beginPath(); ctx.moveTo(0, ty/tilesY*H); ctx.lineTo(W, ty/tilesY*H); ctx.stroke(); }
     ctx.setLineDash([]);
 
-    const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e'];
-    for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) {
-      const td = tileData[ty * tilesX + tx];
-      ctx.save();
-      ctx.beginPath(); ctx.rect(tx/tilesX*W, ty/tilesY*H, W/tilesX, H/tilesY); ctx.clip();
-      for (let e = 0; e < 4; e++) {
-        const p = edgeBoundaryPoints(td.edgeData[e], td.NUM_BUCKETS);
-        if (!td.transitionEdges[e] || !p || p.length < 2) continue;
-        ctx.beginPath();
-        for (let i = 0; i < p.length; i++) {
-          const sx = p[i].u / tilesX * W, sy = p[i].v / tilesY * H;
-          if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+    if (document.getElementById('chk-final-paths').checked) {
+      const edgeColors = ['#d29922', '#39d2c0', '#bc8cff', '#f0883e'];
+      for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) {
+        const td = tileData[ty * tilesX + tx];
+        ctx.save();
+        ctx.beginPath(); ctx.rect(tx/tilesX*W, ty/tilesY*H, W/tilesX, H/tilesY); ctx.clip();
+        for (let e = 0; e < 4; e++) {
+          const p = edgeBoundaryPoints(td.edgeData[e], td.NUM_BUCKETS);
+          if (!td.transitionEdges[e] || !p || p.length < 2) continue;
+          ctx.beginPath();
+          for (let i = 0; i < p.length; i++) {
+            const sx = p[i].u / tilesX * W, sy = p[i].v / tilesY * H;
+            if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+          }
+          ctx.strokeStyle = edgeColors[e]; ctx.lineWidth = 2; ctx.globalAlpha = 0.8; ctx.stroke();
         }
-        ctx.strokeStyle = edgeColors[e]; ctx.lineWidth = 2; ctx.globalAlpha = 0.8; ctx.stroke();
+        ctx.restore();
       }
-      ctx.restore();
+      ctx.globalAlpha = 1;
     }
-    ctx.globalAlpha = 1;
   }
 
   render();
 
+  document.getElementById('chk-final-paths').onchange = () => render();
+  document.getElementById('chk-final-debug').onchange = (e) => {
+    document.getElementById('final-hover-info').style.display = e.target.checked ? '' : 'none';
+  };
+
   const edgeNames = ['S','E','N','W'];
   cv.onmousemove = (e) => {
+    if (!document.getElementById('chk-final-debug').checked) return;
     const rect = cv.getBoundingClientRect();
     const mx = (e.clientX - rect.left) / rect.width, my = (e.clientY - rect.top) / rect.height;
     if (mx < 0 || mx > 1 || my < 0 || my > 1) return;
@@ -3055,11 +3062,14 @@ slideInits[14] = function initFinal() {
     const stoneVal = td.cornerStone[r.corner];
     const info = document.getElementById('final-hover-info');
     if (info) info.textContent =
-      `tile(${tx},${ty}) assigned=${edgeNames[r.assigned]} corner=${r.corner} stone=${stoneVal}`
-      + ` raw=[${r.rawSides.map(v=>v.toFixed(3)).join(',')}]`
-      + ` sRaw=[${r.sRaw ? r.sRaw.map(v=>v.toFixed(2)).join(',') : 'n/a'}]`
-      + ` s=[${r.sLocal.map(v=>v.toFixed(2)).join(',')}]`
-      + ` corners=[${td.cornerStone.join(',')}]`;
+      `tile(${tx},${ty}) edge=${edgeNames[r.assigned]} corner=${r.corner} stone=${stoneVal}`
+      + `  s=[${r.sRaw.map(v=>v.toFixed(2)).join(',')}]`
+      + `  t'=[${r.rawSides.map(v=>v.toFixed(3)).join(',')}]`
+      + `  corners=[${td.cornerStone.join(',')}]`;
+  };
+  cv.onmouseleave = () => {
+    const info = document.getElementById('final-hover-info');
+    if (info) info.textContent = '';
   };
 };
 
