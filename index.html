@@ -21,16 +21,15 @@ html, body { width:100%; height:100%; overflow:hidden; background:var(--bg); col
 .slides { position:relative; width:100%; height:100%; }
 .slide {
   position:absolute; inset:0; display:flex; flex-direction:column;
-  justify-content:center; align-items:center; padding:3vh 5vw;
+  align-items:center; padding:3vh 5vw 5em;
   opacity:0; pointer-events:none; transition: opacity 0.4s ease;
   overflow-y:auto;
-  background: url('images/hero-screenshot.png') center/cover no-repeat;
+  background:
+    linear-gradient(rgba(13,17,23,0.82), rgba(13,17,23,0.82)),
+    url('images/hero-screenshot.png') center/cover no-repeat;
 }
-.slide::before {
-  content:''; position:absolute; inset:0;
-  background:rgba(13,17,23,0.82); pointer-events:none;
-}
-.slide > * { position:relative; }
+.slide > *:first-child { margin-top:auto; }
+.slide > *:last-child { margin-bottom:auto; }
 .slide.active { opacity:1; pointer-events:auto; }
 
 h1 { font-size:clamp(1.8rem,3.5vw,3.2rem); font-weight:700; line-height:1.15; text-align:center; margin-bottom:0.4em; color:var(--fg); }
@@ -609,7 +608,7 @@ albedo = <span class="fn">mix</span>(albedo, moss_color, moss);
       <label style="font-size:0.85em;"><input type="checkbox" id="chk-final-paths"> Show paths</label>
       <label style="font-size:0.85em;"><input type="checkbox" id="chk-final-debug"> Show debug</label>
     </div>
-    <p id="final-hover-info" class="small" style="font-family:monospace; min-height:1.2em; color:var(--fg-muted); text-align:center; display:none;"></p>
+    <p id="final-hover-info" class="small" style="font-family:monospace; min-height:1.2em; color:var(--fg-muted); text-align:center; white-space:nowrap; display:none;"></p>
     <div style="margin-top:1em;">
       <p style="font-size:1.1rem; color:var(--fg);">Stone–grass boundaries that follow natural texture features,<br>computed entirely on the GPU at load time.</p>
     </div>
@@ -1667,7 +1666,7 @@ slideInits[5] = function initCracks() {
     document.getElementById('v-midpoint').textContent = midpoint.toFixed(3);
     document.getElementById('v-spread').textContent = spread.toFixed(3);
 
-    const radius = Math.round(Math.pow(2, blurMip - 1));
+    const radius = blurMip > 0 ? Math.round(Math.pow(2, blurMip - 1)) : 0;
     const blurred = boxBlur(height, SIZE, SIZE, radius);
 
     // Stone albedo view (left)
